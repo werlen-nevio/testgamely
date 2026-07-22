@@ -39,6 +39,8 @@ export interface Player {
   facingX: number
   facingY: number
   invulnerableTicks: number
+  // Ticks until the weapon may fire again; derived from the fireRate stat.
+  shootCooldownTicks: number
 }
 
 // ─── MOVEMENT FEEL ───
@@ -64,7 +66,20 @@ export const createPlayer = (x: number, y: number): Player => ({
   facingX: 0,
   facingY: 1,
   invulnerableTicks: 0,
+  shootCooldownTicks: 0,
 })
+
+// ─── INVULNERABILITY ───
+export const PLAYER_INVULNERABLE_TICKS = 60 // ~1 second of i-frames after a hit
+
+// Applies damage unless the player is already flashing. Returns true if this
+// hit brought the player to zero hearts.
+export const damagePlayer = (player: Player, amount: number): boolean => {
+  if (player.invulnerableTicks > 0) return false
+  player.stats.hearts -= amount
+  player.invulnerableTicks = PLAYER_INVULNERABLE_TICKS
+  return player.stats.hearts <= 0
+}
 
 export const updatePlayer = (
   player: Player,
@@ -100,6 +115,7 @@ export const updatePlayer = (
 
   // ─── TIMERS ───
   if (player.invulnerableTicks > 0) player.invulnerableTicks -= 1
+  if (player.shootCooldownTicks > 0) player.shootCooldownTicks -= 1
 }
 
 const BODY_COLOR = "#e9ddc0"
