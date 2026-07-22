@@ -25,6 +25,9 @@ export interface RoomNode {
   // cleared room keeps its rocks when revisited.
   instantiated: boolean
   obstacles: Obstacle[]
+  // Item-room pedestal: which item it offers and whether it has been taken.
+  pedestalItemId: string | null
+  pedestalTaken: boolean
 }
 
 export interface Floor {
@@ -52,6 +55,8 @@ const createNode = (gridX: number, gridY: number, kind: RoomKind): RoomNode => (
   cleared: false,
   instantiated: false,
   obstacles: [],
+  pedestalItemId: null,
+  pedestalTaken: false,
 })
 
 const shuffled = <T>(values: readonly T[]): T[] => {

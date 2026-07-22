@@ -2,6 +2,7 @@ import type { Renderer } from "./core/Renderer"
 import type { Input } from "./core/Input"
 import { SpatialGrid } from "./core/SpatialGrid"
 import { circlesOverlap } from "./core/collision"
+import { approach } from "./core/math"
 import {
   ROOM_CENTER_X,
   ROOM_CENTER_Y,
@@ -18,9 +19,21 @@ import {
   tileCenterX,
   tileCenterY,
 } from "./constants"
-import { createPlayer, updatePlayer, renderPlayer, damagePlayer, type Player } from "./entities/Player"
+import {
+  createPlayer,
+  updatePlayer,
+  renderPlayer,
+  damagePlayer,
+  recomputePlayerStats,
+  type Player,
+} from "./entities/Player"
 import { createEnemy, updateEnemy, renderEnemy, damageEnemy, type Enemy } from "./entities/Enemy"
-import { ProjectilePool } from "./entities/Projectile"
+import {
+  ProjectilePool,
+  copyShotModifiers,
+  type Projectile,
+  type ProjectileSpawn,
+} from "./entities/Projectile"
 import {
   createObstacle,
   resolveCircleAgainstObstacles,
@@ -32,11 +45,13 @@ import { DIRECTIONS, DIRECTION_DELTA, OPPOSITE_DIRECTION, type Direction } from 
 import { renderRoom } from "./world/Room"
 import { renderHud } from "./ui/HUD"
 import { renderMinimap } from "./ui/Minimap"
+import { itemById, randomItemId } from "./items/registry"
+import type { Item, RunApi } from "./items/Item"
 
 // ─── RUN ───
-// A single playthrough: the player, the current floor, and the room they are
-// standing in. Owns the combat loop and the room-to-room transitions. The scene
-// manager (Game) creates a Run on start and drops it on death.
+// A single playthrough. Owns the player, the current floor, the combat loop and
+// the item hooks. Implements RunApi so item hooks can spawn shots, heal, etc.
+// without importing the Run class.
 
 const PROJECTILE_CAPACITY = 512
 const COLLISION_CELL_SIZE = 48
@@ -45,18 +60,28 @@ const SHOT_IMPULSE_CARRY = 0.2
 const SHOT_RADIUS = 6
 const TRANSITION_TICKS = 12
 const DOOR_ENTRY_INSET = TILE * 0.8
+const HOMING_RESPONSE = 0.09
+const PEDESTAL_RADIUS = 18
+const PICKUP_TOAST_TICKS = 150
 
-export class Run {
+export class Run implements RunApi {
   readonly player: Player
   floor: Floor
   currentRoom: RoomNode
   level = 1
+  coins = 0
   enemies: Enemy[] = []
   readonly projectiles = new ProjectilePool(PROJECTILE_CAPACITY)
   transitionTicks = 0
   playerDead = false
 
   private readonly grid = new SpatialGrid(VIEW_WIDTH, VIEW_HEIGHT, COLLISION_CELL_SIZE)
+  // Projectiles spawned during the shot currently being fired, so extra shots
+  // inherit the primary's final flags.
+  private readonly shotBuffer: Projectile[] = []
+  private shakeStrength = 0
+  private pickupToastText = ""
+  private pickupToastTicks = 0
 
   constructor() {
     this.player = createPlayer(ROOM_CENTER_X, ROOM_CENTER_Y)
@@ -68,6 +93,10 @@ export class Run {
   // ─── UPDATE ───
 
   update(input: Input, deltaSeconds: number): void {
+    if (this.pickupToastTicks > 0) this.pickupToastTicks -= 1
+    if (this.shakeStrength > 0.1) this.shakeStrength *= 0.85
+    else this.shakeStrength = 0
+
     if (this.transitionTicks > 0) {
       this.transitionTicks -= 1
       return
@@ -83,6 +112,7 @@ export class Run {
       resolveCircleAgainstObstacles(enemy.transform, enemy.body.radius, this.currentRoom.obstacles)
     }
 
+    this.steerHomingShots()
     this.projectiles.update(deltaSeconds)
     this.resolveProjectilesHittingObstacles()
     this.resolvePlayerShotsHittingEnemies()
@@ -91,7 +121,10 @@ export class Run {
 
     if (!this.currentRoom.cleared && this.enemies.length === 0) {
       this.currentRoom.cleared = true
+      this.runRoomClearHooks()
     }
+
+    this.handleItemPedestal()
 
     if (this.player.stats.hearts <= 0) {
       this.playerDead = true
@@ -101,7 +134,51 @@ export class Run {
     if (this.currentRoom.cleared) this.tryRoomTransition()
   }
 
-  // ─── SHOOTING ───
+  // ─── RUN API (used by item hooks) ───
+
+  spawnShot(spawn: ProjectileSpawn): Projectile | null {
+    const projectile = this.projectiles.spawn(spawn)
+    if (projectile) this.shotBuffer.push(projectile)
+    return projectile
+  }
+
+  spawnProjectile(spawn: ProjectileSpawn): Projectile | null {
+    return this.projectiles.spawn(spawn)
+  }
+
+  heal(hearts: number): void {
+    const stats = this.player.stats
+    stats.hearts = Math.min(stats.maxHearts, stats.hearts + hearts)
+  }
+
+  addCoins(amount: number): void {
+    this.coins += amount
+  }
+
+  nearestEnemyTo(x: number, y: number): Enemy | null {
+    let best: Enemy | null = null
+    let bestDistance = Infinity
+    for (const enemy of this.enemies) {
+      if (!enemy.active) continue
+      const distance = (enemy.transform.x - x) ** 2 + (enemy.transform.y - y) ** 2
+      if (distance < bestDistance) {
+        bestDistance = distance
+        best = enemy
+      }
+    }
+    return best
+  }
+
+  spawnPickupDrop(_x: number, _y: number): void {
+    // Ground pickups arrive in a later stage; the hook exists so item data can
+    // already reference it.
+  }
+
+  shake(strength: number): void {
+    this.shakeStrength = Math.max(this.shakeStrength, strength)
+  }
+
+  // ─── SHOOTING & ITEM HOOKS ───
 
   private handleShooting(input: Input): void {
     const player = this.player
@@ -114,7 +191,8 @@ export class Run {
     const transform = player.transform
     const muzzleDistance = player.body.radius + 4
 
-    this.projectiles.spawn({
+    this.shotBuffer.length = 0
+    const primary = this.projectiles.spawn({
       faction: "player",
       x: transform.x + aim.x * muzzleDistance,
       y: transform.y + aim.y * muzzleDistance,
@@ -124,8 +202,42 @@ export class Run {
       damage: stats.damage,
       lifeTicks: Math.round((stats.range / stats.shotSpeed) * TICKS_PER_SECOND),
     })
-
     player.shootCooldownTicks = Math.max(1, Math.round(TICKS_PER_SECOND / stats.fireRate))
+    if (!primary) return
+
+    this.shotBuffer.push(primary)
+    for (const item of player.items) {
+      item.onShoot?.({ run: this, player, projectile: primary, aimX: aim.x, aimY: aim.y })
+    }
+
+    // Give every extra shot the primary's final modifiers, so item order never
+    // decides which shots pierce / home / bounce.
+    for (const shot of this.shotBuffer) {
+      if (shot !== primary) copyShotModifiers(primary, shot)
+    }
+  }
+
+  private steerHomingShots(): void {
+    for (const projectile of this.projectiles.items) {
+      if (!projectile.active || projectile.faction !== "player" || !projectile.flags.homing) continue
+      const target = this.nearestEnemyTo(projectile.transform.x, projectile.transform.y)
+      if (!target) continue
+
+      const deltaX = target.transform.x - projectile.transform.x
+      const deltaY = target.transform.y - projectile.transform.y
+      const distance = Math.hypot(deltaX, deltaY)
+      if (distance < 1) continue
+
+      const speed = Math.hypot(projectile.transform.velocityX, projectile.transform.velocityY)
+      let steeredX = approach(projectile.transform.velocityX, (deltaX / distance) * speed, HOMING_RESPONSE)
+      let steeredY = approach(projectile.transform.velocityY, (deltaY / distance) * speed, HOMING_RESPONSE)
+      const steeredSpeed = Math.hypot(steeredX, steeredY) || 1
+      // Renormalise so homing turns the shot without changing its speed.
+      steeredX = (steeredX / steeredSpeed) * speed
+      steeredY = (steeredY / steeredSpeed) * speed
+      projectile.transform.velocityX = steeredX
+      projectile.transform.velocityY = steeredY
+    }
   }
 
   // ─── COLLISION ───
@@ -173,7 +285,11 @@ export class Run {
         }
 
         const died = damageEnemy(enemy, projectile.damage)
-        if (died) enemy.active = false
+        this.runHitHooks(projectile, enemy)
+        if (died) {
+          enemy.active = false
+          this.runKillHooks(enemy)
+        }
 
         if (projectile.pierceRemaining > 0) {
           projectile.pierceRemaining -= 1
@@ -201,8 +317,30 @@ export class Run {
         )
       ) {
         damagePlayer(player, enemy.contactDamage)
+        this.shake(6)
+        for (const item of player.items) {
+          item.onDamageTaken?.({ run: this, player, amount: enemy.contactDamage })
+        }
         return
       }
+    }
+  }
+
+  private runHitHooks(projectile: Projectile, enemy: Enemy): void {
+    for (const item of this.player.items) {
+      item.onHit?.({ run: this, player: this.player, projectile, enemy })
+    }
+  }
+
+  private runKillHooks(enemy: Enemy): void {
+    for (const item of this.player.items) {
+      item.onKill?.({ run: this, player: this.player, enemy, x: enemy.transform.x, y: enemy.transform.y })
+    }
+  }
+
+  private runRoomClearHooks(): void {
+    for (const item of this.player.items) {
+      item.onRoomClear?.({ run: this, player: this.player })
     }
   }
 
@@ -215,6 +353,36 @@ export class Run {
       writeIndex += 1
     }
     this.enemies.length = writeIndex
+  }
+
+  // ─── ITEMS ───
+
+  private handleItemPedestal(): void {
+    const room = this.currentRoom
+    if (room.kind !== "item" || !room.pedestalItemId || room.pedestalTaken) return
+    const player = this.player
+    if (
+      circlesOverlap(
+        player.transform.x,
+        player.transform.y,
+        player.body.radius,
+        ROOM_CENTER_X,
+        ROOM_CENTER_Y,
+        PEDESTAL_RADIUS,
+      )
+    ) {
+      const item = itemById(room.pedestalItemId)
+      if (item) this.grantItem(item)
+      room.pedestalTaken = true
+    }
+  }
+
+  private grantItem(item: Item): void {
+    this.player.items.push(item)
+    item.onPickup?.({ run: this, player: this.player })
+    recomputePlayerStats(this.player)
+    this.pickupToastText = item.name
+    this.pickupToastTicks = PICKUP_TOAST_TICKS
   }
 
   // ─── ROOMS ───
@@ -254,8 +422,6 @@ export class Run {
     this.transitionTicks = TRANSITION_TICKS
   }
 
-  // entrySide is the door of the new room the player walks in through, or null
-  // for the initial room (spawn dead centre).
   private enterRoom(node: RoomNode, entrySide: Direction | null): void {
     node.visited = true
     this.currentRoom = node
@@ -270,6 +436,8 @@ export class Run {
         for (const spawn of template.enemies) {
           this.enemies.push(createEnemy(spawn.type, tileCenterX(spawn.col), tileCenterY(spawn.row)))
         }
+      } else if (node.kind === "item") {
+        node.pedestalItemId = randomItemId(this.player.items.map((item) => item.id))
       }
       if (this.enemies.length === 0) node.cleared = true
     }
@@ -305,18 +473,61 @@ export class Run {
   // ─── RENDER ───
 
   render(renderer: Renderer, interpolation: number): void {
-    renderRoom(renderer, this.currentRoom)
+    const context = renderer.context
 
+    context.save()
+    if (this.shakeStrength > 0) {
+      const offsetX = (Math.random() * 2 - 1) * this.shakeStrength
+      const offsetY = (Math.random() * 2 - 1) * this.shakeStrength
+      context.translate(offsetX, offsetY)
+    }
+
+    renderRoom(renderer, this.currentRoom)
+    if (this.currentRoom.kind === "item") this.renderPedestal(renderer)
     for (const enemy of this.enemies) {
       if (enemy.active) renderEnemy(renderer, enemy, interpolation)
     }
     this.projectiles.render(renderer, interpolation)
     renderPlayer(renderer, this.player, interpolation)
 
-    renderHud(renderer, this.player)
-    renderMinimap(renderer, this.floor, this.currentRoom.index)
+    context.restore()
 
+    renderHud(renderer, this.player, this.coins)
+    renderMinimap(renderer, this.floor, this.currentRoom.index)
+    if (this.pickupToastTicks > 0) this.renderPickupToast(renderer)
     if (this.transitionTicks > 0) this.renderTransitionFade(renderer)
+  }
+
+  private renderPedestal(renderer: Renderer): void {
+    const room = this.currentRoom
+    if (room.pedestalTaken || !room.pedestalItemId) return
+    const item = itemById(room.pedestalItemId)
+    if (!item) return
+    const context = renderer.context
+
+    // Base.
+    renderer.fillRect(ROOM_CENTER_X - 16, ROOM_CENTER_Y + 8, 32, 10, "#2a2320")
+    // Floating item chip.
+    renderer.fillCircle(ROOM_CENTER_X, ROOM_CENTER_Y - 4, PEDESTAL_RADIUS, item.color)
+    context.lineWidth = 2
+    context.strokeStyle = "#1c1512"
+    context.stroke()
+    context.fillStyle = "#1c1512"
+    context.font = "bold 16px monospace"
+    context.textAlign = "center"
+    context.textBaseline = "middle"
+    context.fillText(item.glyph, ROOM_CENTER_X, ROOM_CENTER_Y - 3)
+    context.textAlign = "left"
+  }
+
+  private renderPickupToast(renderer: Renderer): void {
+    const context = renderer.context
+    context.textAlign = "center"
+    context.textBaseline = "middle"
+    context.fillStyle = "#f0e6cf"
+    context.font = "bold 18px monospace"
+    context.fillText(this.pickupToastText, ROOM_CENTER_X, ROOM_BOTTOM - 26)
+    context.textAlign = "left"
   }
 
   private renderTransitionFade(renderer: Renderer): void {

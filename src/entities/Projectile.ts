@@ -52,6 +52,19 @@ const resetFlags = (flags: ProjectileFlags): void => {
   flags.poison = false
 }
 
+// Copies one projectile's shot modifiers onto another. Used so extra shots
+// spawned mid-onShoot (spread, etc.) end up with the same final flags as the
+// primary, regardless of the order items ran in.
+export const copyShotModifiers = (source: Projectile, target: Projectile): void => {
+  target.flags.homing = source.flags.homing
+  target.flags.piercing = source.flags.piercing
+  target.flags.explosive = source.flags.explosive
+  target.flags.bouncing = source.flags.bouncing
+  target.flags.poison = source.flags.poison
+  target.pierceRemaining = source.pierceRemaining
+  target.bounceRemaining = source.bounceRemaining
+}
+
 const createInactiveProjectile = (): Projectile => ({
   active: false,
   faction: "player",

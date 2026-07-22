@@ -4,6 +4,8 @@ import { Input } from "./core/Input"
 import { Loop } from "./core/Loop"
 import { Game } from "./Game"
 import { generateFloor } from "./world/Floor"
+import { recomputePlayerStats } from "./entities/Player"
+import { itemById } from "./items/registry"
 
 // ─── BOOTSTRAP ───
 // Wire the subsystems together and hand the fixed-timestep loop the game's
@@ -30,4 +32,6 @@ if (import.meta.env.DEV) {
   const debugWindow = window as unknown as Record<string, unknown>
   debugWindow.game = game
   debugWindow.generateFloor = generateFloor
+  debugWindow.recomputePlayerStats = recomputePlayerStats
+  debugWindow.itemById = itemById
 }

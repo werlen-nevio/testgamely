@@ -13,6 +13,7 @@ import {
   type Body,
   type Transform,
 } from "./components"
+import type { Item } from "../items/Item"
 
 // ─── PLAYER STATS ───
 // The stats object is intentionally standalone: items mutate it, the HUD reads
@@ -33,7 +34,12 @@ export interface PlayerStats {
 export interface Player {
   transform: Transform
   body: Body
+  // `baseStats` are the untouched starting values; `stats` is what gameplay
+  // reads, recomputed from base by running every item's modifyStats hook. The
+  // split means picking up (or losing) an item never accumulates rounding drift.
+  baseStats: PlayerStats
   stats: PlayerStats
+  items: Item[]
   // Unit vector describing where the player last aimed or moved — used for the
   // facing indicator now, and shot direction fallback later.
   facingX: number
@@ -50,24 +56,41 @@ export interface Player {
 const ACCELERATION_RESPONSE = 0.24
 const STOP_RESPONSE = 0.16
 
-export const createPlayer = (x: number, y: number): Player => ({
-  transform: createTransform(x, y),
-  body: { radius: 15 },
-  stats: {
-    damage: 3.5,
-    fireRate: 2.5,
-    shotSpeed: 340,
-    range: 430,
-    moveSpeed: 205,
-    luck: 0,
-    maxHearts: 3,
-    hearts: 3,
-  },
-  facingX: 0,
-  facingY: 1,
-  invulnerableTicks: 0,
-  shootCooldownTicks: 0,
+const createBaseStats = (): PlayerStats => ({
+  damage: 3.5,
+  fireRate: 2.5,
+  shotSpeed: 340,
+  range: 430,
+  moveSpeed: 205,
+  luck: 0,
+  maxHearts: 3,
+  hearts: 3,
 })
+
+export const createPlayer = (x: number, y: number): Player => {
+  const baseStats = createBaseStats()
+  return {
+    transform: createTransform(x, y),
+    body: { radius: 15 },
+    baseStats,
+    stats: { ...baseStats },
+    items: [],
+    facingX: 0,
+    facingY: 1,
+    invulnerableTicks: 0,
+    shootCooldownTicks: 0,
+  }
+}
+
+// Rebuilds derived stats from the base values plus every item's modifyStats
+// hook. Current hearts carry over (clamped to the possibly-changed maximum);
+// everything else is recomputed from scratch so item order never matters.
+export const recomputePlayerStats = (player: Player): void => {
+  const derived: PlayerStats = { ...player.baseStats }
+  for (const item of player.items) item.modifyStats?.(derived)
+  derived.hearts = Math.max(0, Math.min(player.stats.hearts, derived.maxHearts))
+  player.stats = derived
+}
 
 // ─── INVULNERABILITY ───
 export const PLAYER_INVULNERABLE_TICKS = 60 // ~1 second of i-frames after a hit
