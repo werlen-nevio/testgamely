@@ -48,6 +48,17 @@ export const createChaser = (x: number, y: number): Enemy => ({
   moveDirY: 0,
 })
 
+// Dispatches to the right factory. Until the remaining behaviours land in a
+// later stage, every unimplemented type falls back to a chaser so room
+// templates can already reference the full roster.
+export const createEnemy = (type: EnemyType, x: number, y: number): Enemy => {
+  switch (type) {
+    case "chaser":
+    default:
+      return createChaser(x, y)
+  }
+}
+
 // ─── UPDATE ───
 
 const CHASER_SPEED = 82

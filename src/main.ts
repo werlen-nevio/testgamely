@@ -3,6 +3,7 @@ import { Renderer } from "./core/Renderer"
 import { Input } from "./core/Input"
 import { Loop } from "./core/Loop"
 import { Game } from "./Game"
+import { generateFloor } from "./world/Floor"
 
 // ─── BOOTSTRAP ───
 // Wire the subsystems together and hand the fixed-timestep loop the game's
@@ -22,8 +23,11 @@ const loop = new Loop(
 
 loop.start()
 
-// Expose the running game during development so it can be inspected and
-// automated from the console / test harness. Stripped from production builds.
+// Expose the running game (and a few internals) during development so it can be
+// inspected and automated from the console / test harness. Stripped from
+// production builds.
 if (import.meta.env.DEV) {
-  ;(window as unknown as { game: Game }).game = game
+  const debugWindow = window as unknown as Record<string, unknown>
+  debugWindow.game = game
+  debugWindow.generateFloor = generateFloor
 }

@@ -1,0 +1,148 @@
+{
+  "comment": "Hand-authored normal-room layouts. Interior is 15 cols (0..14) x 9 rows (0..8). Door lanes (centre col 7, centre row 4) near the edges are kept clear; the loader also strips any obstacle sitting in a door approach. forDoors filters a template to rooms with a matching door count.",
+  "templates": [
+    {
+      "id": "open-pair",
+      "forDoors": [1, 2, 3, 4],
+      "obstacles": [],
+      "enemies": [
+        { "type": "chaser", "col": 4, "row": 4 },
+        { "type": "chaser", "col": 10, "row": 4 }
+      ]
+    },
+    {
+      "id": "four-pillars",
+      "forDoors": [1, 2, 3, 4],
+      "obstacles": [
+        [4, 2],
+        [10, 2],
+        [4, 6],
+        [10, 6]
+      ],
+      "enemies": [
+        { "type": "chaser", "col": 7, "row": 2 },
+        { "type": "bouncer", "col": 3, "row": 4 },
+        { "type": "bouncer", "col": 11, "row": 4 }
+      ]
+    },
+    {
+      "id": "diamond",
+      "forDoors": [1, 2],
+      "obstacles": [
+        [7, 2],
+        [5, 4],
+        [9, 4],
+        [7, 6]
+      ],
+      "enemies": [
+        { "type": "chaser", "col": 3, "row": 2 },
+        { "type": "chaser", "col": 11, "row": 6 },
+        { "type": "hopper", "col": 7, "row": 4 }
+      ]
+    },
+    {
+      "id": "corners",
+      "forDoors": [1, 2, 3, 4],
+      "obstacles": [
+        [2, 2],
+        [3, 2],
+        [2, 3],
+        [12, 2],
+        [11, 2],
+        [12, 3],
+        [2, 6],
+        [3, 6],
+        [2, 5],
+        [12, 6],
+        [11, 6],
+        [12, 5]
+      ],
+      "enemies": [
+        { "type": "shooter", "col": 7, "row": 2 },
+        { "type": "chaser", "col": 5, "row": 4 },
+        { "type": "chaser", "col": 9, "row": 4 }
+      ]
+    },
+    {
+      "id": "gauntlet",
+      "forDoors": [2],
+      "obstacles": [
+        [5, 2],
+        [5, 3],
+        [9, 5],
+        [9, 6]
+      ],
+      "enemies": [
+        { "type": "hopper", "col": 3, "row": 4 },
+        { "type": "hopper", "col": 11, "row": 4 },
+        { "type": "chaser", "col": 7, "row": 6 }
+      ]
+    },
+    {
+      "id": "split-nest",
+      "forDoors": [1, 2, 3],
+      "obstacles": [
+        [7, 3],
+        [7, 5]
+      ],
+      "enemies": [
+        { "type": "splitter", "col": 4, "row": 4 },
+        { "type": "splitter", "col": 10, "row": 4 }
+      ]
+    },
+    {
+      "id": "crossfire",
+      "forDoors": [2, 3, 4],
+      "obstacles": [
+        [6, 2],
+        [8, 2],
+        [6, 6],
+        [8, 6]
+      ],
+      "enemies": [
+        { "type": "shooter", "col": 2, "row": 4 },
+        { "type": "shooter", "col": 12, "row": 4 },
+        { "type": "chaser", "col": 7, "row": 4 }
+      ]
+    },
+    {
+      "id": "swarm",
+      "forDoors": [1, 2, 3, 4],
+      "obstacles": [],
+      "enemies": [
+        { "type": "chaser", "col": 3, "row": 3 },
+        { "type": "chaser", "col": 11, "row": 3 },
+        { "type": "chaser", "col": 3, "row": 5 },
+        { "type": "chaser", "col": 11, "row": 5 },
+        { "type": "hopper", "col": 7, "row": 4 }
+      ]
+    },
+    {
+      "id": "twin-lanes",
+      "forDoors": [2, 3],
+      "obstacles": [
+        [4, 3],
+        [7, 3],
+        [10, 3],
+        [4, 5],
+        [7, 5],
+        [10, 5]
+      ],
+      "enemies": [
+        { "type": "bouncer", "col": 2, "row": 4 },
+        { "type": "bouncer", "col": 12, "row": 4 }
+      ]
+    },
+    {
+      "id": "sentries",
+      "forDoors": [1, 2, 3, 4],
+      "obstacles": [
+        [7, 4]
+      ],
+      "enemies": [
+        { "type": "shooter", "col": 3, "row": 2 },
+        { "type": "shooter", "col": 11, "row": 6 }
+      ]
+    }
+  ]
+}
