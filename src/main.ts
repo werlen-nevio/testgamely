@@ -5,6 +5,8 @@ import { Loop } from "./core/Loop"
 import { Game } from "./Game"
 import { generateFloor } from "./world/Floor"
 import { recomputePlayerStats } from "./entities/Player"
+import { createEnemy } from "./entities/Enemy"
+import { createBoss } from "./entities/Boss"
 import { itemById } from "./items/registry"
 
 // ─── BOOTSTRAP ───
@@ -34,4 +36,6 @@ if (import.meta.env.DEV) {
   debugWindow.generateFloor = generateFloor
   debugWindow.recomputePlayerStats = recomputePlayerStats
   debugWindow.itemById = itemById
+  debugWindow.createEnemy = createEnemy
+  debugWindow.createBoss = createBoss
 }

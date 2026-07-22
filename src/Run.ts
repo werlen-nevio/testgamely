@@ -27,7 +27,17 @@ import {
   recomputePlayerStats,
   type Player,
 } from "./entities/Player"
-import { createEnemy, updateEnemy, renderEnemy, damageEnemy, type Enemy } from "./entities/Enemy"
+import {
+  createEnemy,
+  createSplitter,
+  updateEnemy,
+  renderEnemy,
+  damageEnemy,
+  canSplit,
+  type Enemy,
+  type EnemyContext,
+} from "./entities/Enemy"
+import { createBoss, updateBoss, renderBoss, damageBoss, type Boss } from "./entities/Boss"
 import {
   ProjectilePool,
   copyShotModifiers,
@@ -62,6 +72,7 @@ const TRANSITION_TICKS = 12
 const DOOR_ENTRY_INSET = TILE * 0.8
 const HOMING_RESPONSE = 0.09
 const PEDESTAL_RADIUS = 18
+const TRAPDOOR_RADIUS = 22
 const PICKUP_TOAST_TICKS = 150
 
 export class Run implements RunApi {
@@ -71,15 +82,23 @@ export class Run implements RunApi {
   level = 1
   coins = 0
   enemies: Enemy[] = []
+  boss: Boss | null = null
   readonly projectiles = new ProjectilePool(PROJECTILE_CAPACITY)
   transitionTicks = 0
   playerDead = false
 
   private readonly grid = new SpatialGrid(VIEW_WIDTH, VIEW_HEIGHT, COLLISION_CELL_SIZE)
+  // Reused each tick so enemies can shoot / read obstacles without allocation.
+  private readonly enemyContext: EnemyContext = {
+    obstacles: [],
+    spawnEnemyProjectile: (x, y, velocityX, velocityY, damage) =>
+      this.spawnEnemyProjectile(x, y, velocityX, velocityY, damage),
+  }
   // Projectiles spawned during the shot currently being fired, so extra shots
   // inherit the primary's final flags.
   private readonly shotBuffer: Projectile[] = []
   private shakeStrength = 0
+  private trapdoorArmTicks = 0
   private pickupToastText = ""
   private pickupToastTicks = 0
 
@@ -106,20 +125,29 @@ export class Run implements RunApi {
     resolveCircleAgainstObstacles(this.player.transform, this.player.body.radius, this.currentRoom.obstacles)
     this.handleShooting(input)
 
+    this.enemyContext.obstacles = this.currentRoom.obstacles
     for (const enemy of this.enemies) {
       if (!enemy.active) continue
-      updateEnemy(enemy, this.player, deltaSeconds)
-      resolveCircleAgainstObstacles(enemy.transform, enemy.body.radius, this.currentRoom.obstacles)
+      updateEnemy(enemy, this.player, this.enemyContext, deltaSeconds)
+      // The bouncer resolves its own wall/obstacle reflection; the rest slide.
+      if (enemy.type !== "bouncer") {
+        resolveCircleAgainstObstacles(enemy.transform, enemy.body.radius, this.currentRoom.obstacles)
+      }
     }
+    if (this.boss) updateBoss(this.boss, this.player, this.enemyContext, deltaSeconds)
 
     this.steerHomingShots()
     this.projectiles.update(deltaSeconds)
     this.resolveProjectilesHittingObstacles()
     this.resolvePlayerShotsHittingEnemies()
+    this.resolvePlayerShotsHittingBoss()
     this.resolveEnemiesTouchingPlayer()
+    this.resolveEnemyShotsHittingPlayer()
     this.compactEnemies()
 
-    if (!this.currentRoom.cleared && this.enemies.length === 0) {
+    // Boss rooms clear on the boss's death (handled there); every other room
+    // clears when the last enemy falls.
+    if (this.currentRoom.kind !== "boss" && !this.currentRoom.cleared && this.enemies.length === 0) {
       this.currentRoom.cleared = true
       this.runRoomClearHooks()
     }
@@ -131,6 +159,7 @@ export class Run implements RunApi {
       return
     }
 
+    this.handleTrapdoor()
     if (this.currentRoom.cleared) this.tryRoomTransition()
   }
 
@@ -144,6 +173,25 @@ export class Run implements RunApi {
 
   spawnProjectile(spawn: ProjectileSpawn): Projectile | null {
     return this.projectiles.spawn(spawn)
+  }
+
+  private spawnEnemyProjectile(
+    x: number,
+    y: number,
+    velocityX: number,
+    velocityY: number,
+    damage: number,
+  ): void {
+    this.projectiles.spawn({
+      faction: "enemy",
+      x,
+      y,
+      velocityX,
+      velocityY,
+      radius: 7,
+      damage,
+      lifeTicks: 200,
+    })
   }
 
   heal(hearts: number): void {
@@ -289,6 +337,7 @@ export class Run implements RunApi {
         if (died) {
           enemy.active = false
           this.runKillHooks(enemy)
+          if (canSplit(enemy)) this.splitEnemy(enemy)
         }
 
         if (projectile.pierceRemaining > 0) {
@@ -301,9 +350,56 @@ export class Run implements RunApi {
     }
   }
 
+  private resolvePlayerShotsHittingBoss(): void {
+    const boss = this.boss
+    if (!boss) return
+    for (const projectile of this.projectiles.items) {
+      if (!projectile.active || projectile.faction !== "player") continue
+      if (
+        !circlesOverlap(
+          projectile.transform.x,
+          projectile.transform.y,
+          projectile.radius,
+          boss.transform.x,
+          boss.transform.y,
+          boss.body.radius,
+        )
+      ) {
+        continue
+      }
+      const died = damageBoss(boss, projectile.damage)
+      if (died) {
+        this.defeatBoss()
+        return
+      }
+      if (projectile.pierceRemaining > 0) {
+        projectile.pierceRemaining -= 1
+        continue
+      }
+      projectile.active = false
+    }
+  }
+
   private resolveEnemiesTouchingPlayer(): void {
     const player = this.player
     if (player.invulnerableTicks > 0) return
+
+    const boss = this.boss
+    if (
+      boss &&
+      circlesOverlap(
+        player.transform.x,
+        player.transform.y,
+        player.body.radius,
+        boss.transform.x,
+        boss.transform.y,
+        boss.body.radius,
+      )
+    ) {
+      this.hurtPlayer(boss.contactDamage)
+      return
+    }
+
     for (const enemy of this.enemies) {
       if (!enemy.active) continue
       if (
@@ -316,13 +412,53 @@ export class Run implements RunApi {
           enemy.body.radius,
         )
       ) {
-        damagePlayer(player, enemy.contactDamage)
-        this.shake(6)
-        for (const item of player.items) {
-          item.onDamageTaken?.({ run: this, player, amount: enemy.contactDamage })
-        }
+        this.hurtPlayer(enemy.contactDamage)
         return
       }
+    }
+  }
+
+  private resolveEnemyShotsHittingPlayer(): void {
+    const player = this.player
+    if (player.invulnerableTicks > 0) return
+    for (const projectile of this.projectiles.items) {
+      if (!projectile.active || projectile.faction !== "enemy") continue
+      if (
+        circlesOverlap(
+          projectile.transform.x,
+          projectile.transform.y,
+          projectile.radius,
+          player.transform.x,
+          player.transform.y,
+          player.body.radius,
+        )
+      ) {
+        projectile.active = false
+        this.hurtPlayer(projectile.damage)
+        return
+      }
+    }
+  }
+
+  private hurtPlayer(amount: number): void {
+    const player = this.player
+    damagePlayer(player, amount)
+    this.shake(6)
+    for (const item of player.items) {
+      item.onDamageTaken?.({ run: this, player, amount })
+    }
+  }
+
+  private splitEnemy(parent: Enemy): void {
+    const nextGeneration = parent.generation + 1
+    for (const offset of [-18, 18]) {
+      const child = createSplitter(
+        parent.transform.x + offset,
+        parent.transform.y,
+        nextGeneration,
+      )
+      child.transform.velocityX = offset * 3
+      this.enemies.push(child)
     }
   }
 
@@ -426,6 +562,8 @@ export class Run implements RunApi {
     node.visited = true
     this.currentRoom = node
     this.enemies = []
+    this.boss = null
+    this.trapdoorArmTicks = 0
     this.projectiles.deactivateAll()
 
     if (!node.instantiated) {
@@ -438,11 +576,53 @@ export class Run implements RunApi {
         }
       } else if (node.kind === "item") {
         node.pedestalItemId = randomItemId(this.player.items.map((item) => item.id))
+      } else if (node.kind === "boss") {
+        this.boss = createBoss(this.level)
       }
-      if (this.enemies.length === 0) node.cleared = true
+      // Every room but the boss room clears the moment it holds no enemies.
+      if (node.kind !== "boss" && this.enemies.length === 0) node.cleared = true
     }
 
     this.placePlayerAtEntry(entrySide)
+  }
+
+  // ─── BOSS / FLOOR PROGRESSION ───
+
+  private defeatBoss(): void {
+    this.boss = null
+    this.currentRoom.cleared = true
+    this.trapdoorArmTicks = 45 // brief beat before the exit is walkable
+    this.shake(16)
+    this.runRoomClearHooks()
+  }
+
+  private handleTrapdoor(): void {
+    if (this.currentRoom.kind !== "boss" || !this.currentRoom.cleared) return
+    if (this.trapdoorArmTicks > 0) {
+      this.trapdoorArmTicks -= 1
+      return
+    }
+    const player = this.player
+    if (
+      circlesOverlap(
+        player.transform.x,
+        player.transform.y,
+        player.body.radius,
+        ROOM_CENTER_X,
+        ROOM_CENTER_Y,
+        TRAPDOOR_RADIUS,
+      )
+    ) {
+      this.descendToNextFloor()
+    }
+  }
+
+  private descendToNextFloor(): void {
+    this.level += 1
+    this.floor = generateFloor(this.level)
+    this.currentRoom = this.floor.rooms.get(this.floor.startIndex) as RoomNode
+    this.enterRoom(this.currentRoom, null)
+    this.transitionTicks = TRANSITION_TICKS * 2
   }
 
   private placePlayerAtEntry(entrySide: Direction | null): void {
@@ -484,9 +664,11 @@ export class Run implements RunApi {
 
     renderRoom(renderer, this.currentRoom)
     if (this.currentRoom.kind === "item") this.renderPedestal(renderer)
+    if (this.currentRoom.kind === "boss" && this.currentRoom.cleared) this.renderTrapdoor(renderer)
     for (const enemy of this.enemies) {
       if (enemy.active) renderEnemy(renderer, enemy, interpolation)
     }
+    if (this.boss) renderBoss(renderer, this.boss, interpolation)
     this.projectiles.render(renderer, interpolation)
     renderPlayer(renderer, this.player, interpolation)
 
@@ -494,8 +676,18 @@ export class Run implements RunApi {
 
     renderHud(renderer, this.player, this.coins)
     renderMinimap(renderer, this.floor, this.currentRoom.index)
+    this.renderFloorLabel(renderer)
     if (this.pickupToastTicks > 0) this.renderPickupToast(renderer)
     if (this.transitionTicks > 0) this.renderTransitionFade(renderer)
+  }
+
+  private renderFloorLabel(renderer: Renderer): void {
+    const context = renderer.context
+    context.font = "13px monospace"
+    context.textBaseline = "bottom"
+    context.textAlign = "left"
+    context.fillStyle = "#8c8079"
+    context.fillText(`Ebene ${this.level}`, 14, VIEW_HEIGHT - 12)
   }
 
   private renderPedestal(renderer: Renderer): void {
@@ -518,6 +710,17 @@ export class Run implements RunApi {
     context.textBaseline = "middle"
     context.fillText(item.glyph, ROOM_CENTER_X, ROOM_CENTER_Y - 3)
     context.textAlign = "left"
+  }
+
+  private renderTrapdoor(renderer: Renderer): void {
+    const context = renderer.context
+    renderer.fillCircle(ROOM_CENTER_X, ROOM_CENTER_Y, TRAPDOOR_RADIUS + 4, "#0a0807")
+    renderer.fillCircle(ROOM_CENTER_X, ROOM_CENTER_Y, TRAPDOOR_RADIUS, "#151b24")
+    context.strokeStyle = "#3a4658"
+    context.lineWidth = 3
+    context.beginPath()
+    context.arc(ROOM_CENTER_X, ROOM_CENTER_Y, TRAPDOOR_RADIUS, 0, Math.PI * 2)
+    context.stroke()
   }
 
   private renderPickupToast(renderer: Renderer): void {
