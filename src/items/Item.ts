@@ -25,6 +25,7 @@ export interface RunApi {
   addCoins(amount: number): void
   nearestEnemyTo(x: number, y: number): Enemy | null
   spawnPickupDrop(x: number, y: number): void
+  damageAllEnemies(amount: number): void
   shake(strength: number): void
 }
 

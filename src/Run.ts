@@ -34,6 +34,8 @@ import {
   renderEnemy,
   damageEnemy,
   canSplit,
+  tickPoison,
+  applyPoison,
   type Enemy,
   type EnemyContext,
 } from "./entities/Enemy"
@@ -49,7 +51,9 @@ import {
   resolveCircleAgainstObstacles,
   pointHitsObstacle,
 } from "./entities/Obstacle"
-import { generateFloor, type Floor, type RoomNode } from "./world/Floor"
+import { createPickup, updatePickup, renderPickup, type Pickup, type PickupType } from "./entities/Pickup"
+import { ParticlePool } from "./entities/Particle"
+import { generateFloor, type Floor, type RoomNode, type ShopEntry } from "./world/Floor"
 import { pickTemplate } from "./world/RoomTemplates"
 import { DIRECTIONS, DIRECTION_DELTA, OPPOSITE_DIRECTION, type Direction } from "./world/directions"
 import { renderRoom } from "./world/Room"
@@ -74,6 +78,16 @@ const HOMING_RESPONSE = 0.09
 const PEDESTAL_RADIUS = 18
 const TRAPDOOR_RADIUS = 22
 const PICKUP_TOAST_TICKS = 150
+const BOMB_FUSE_TICKS = 90
+const BOMB_RADIUS = 82
+const BOMB_DAMAGE = 40
+const SHOP_SLOT_OFFSET = 150
+
+interface ActiveBomb {
+  x: number
+  y: number
+  fuseTicks: number
+}
 
 export class Run implements RunApi {
   readonly player: Player
@@ -81,9 +95,13 @@ export class Run implements RunApi {
   currentRoom: RoomNode
   level = 1
   coins = 0
+  bombs = 1
+  keys = 1
   enemies: Enemy[] = []
   boss: Boss | null = null
+  pickups: Pickup[] = []
   readonly projectiles = new ProjectilePool(PROJECTILE_CAPACITY)
+  readonly particles = new ParticlePool(320)
   transitionTicks = 0
   playerDead = false
 
@@ -97,6 +115,7 @@ export class Run implements RunApi {
   // Projectiles spawned during the shot currently being fired, so extra shots
   // inherit the primary's final flags.
   private readonly shotBuffer: Projectile[] = []
+  private readonly activeBombs: ActiveBomb[] = []
   private shakeStrength = 0
   private trapdoorArmTicks = 0
   private pickupToastText = ""
@@ -124,6 +143,7 @@ export class Run implements RunApi {
     updatePlayer(this.player, input, deltaSeconds)
     resolveCircleAgainstObstacles(this.player.transform, this.player.body.radius, this.currentRoom.obstacles)
     this.handleShooting(input)
+    if (input.wasJustPressed("KeyE")) this.placeBomb()
 
     this.enemyContext.obstacles = this.currentRoom.obstacles
     for (const enemy of this.enemies) {
@@ -133,11 +153,15 @@ export class Run implements RunApi {
       if (enemy.type !== "bouncer") {
         resolveCircleAgainstObstacles(enemy.transform, enemy.body.radius, this.currentRoom.obstacles)
       }
+      if (tickPoison(enemy)) this.killEnemy(enemy)
     }
     if (this.boss) updateBoss(this.boss, this.player, this.enemyContext, deltaSeconds)
 
     this.steerHomingShots()
     this.projectiles.update(deltaSeconds)
+    this.particles.update(deltaSeconds)
+    this.updateBombs()
+    this.updatePickups(deltaSeconds)
     this.resolveProjectilesHittingObstacles()
     this.resolvePlayerShotsHittingEnemies()
     this.resolvePlayerShotsHittingBoss()
@@ -150,9 +174,11 @@ export class Run implements RunApi {
     if (this.currentRoom.kind !== "boss" && !this.currentRoom.cleared && this.enemies.length === 0) {
       this.currentRoom.cleared = true
       this.runRoomClearHooks()
+      this.dropRoomClearReward()
     }
 
     this.handleItemPedestal()
+    this.handleShop()
 
     if (this.player.stats.hearts <= 0) {
       this.playerDead = true
@@ -217,9 +243,16 @@ export class Run implements RunApi {
     return best
   }
 
-  spawnPickupDrop(_x: number, _y: number): void {
-    // Ground pickups arrive in a later stage; the hook exists so item data can
-    // already reference it.
+  spawnPickupDrop(x: number, y: number): void {
+    this.pickups.push(createPickup("coin", x, y))
+  }
+
+  damageAllEnemies(amount: number): void {
+    for (const enemy of this.enemies) {
+      if (!enemy.active) continue
+      if (damageEnemy(enemy, amount)) this.killEnemy(enemy)
+    }
+    if (this.boss && damageBoss(this.boss, amount)) this.defeatBoss()
   }
 
   shake(strength: number): void {
@@ -295,9 +328,11 @@ export class Run implements RunApi {
     if (obstacles.length === 0) return
     for (const projectile of this.projectiles.items) {
       if (!projectile.active) continue
-      if (pointHitsObstacle(projectile.transform.x, projectile.transform.y, obstacles)) {
-        projectile.active = false
+      if (!pointHitsObstacle(projectile.transform.x, projectile.transform.y, obstacles)) continue
+      if (projectile.flags.explosive) {
+        this.explodeAt(projectile.transform.x, projectile.transform.y, projectile.damage * 2 + 8, 62)
       }
+      projectile.active = false
     }
   }
 
@@ -333,13 +368,16 @@ export class Run implements RunApi {
         }
 
         const died = damageEnemy(enemy, projectile.damage)
+        if (projectile.flags.poison) applyPoison(enemy, 90)
+        this.particles.burst(projectile.transform.x, projectile.transform.y, 4, "#ffd9a0", 90, 12)
         this.runHitHooks(projectile, enemy)
-        if (died) {
-          enemy.active = false
-          this.runKillHooks(enemy)
-          if (canSplit(enemy)) this.splitEnemy(enemy)
-        }
+        if (died) this.killEnemy(enemy)
 
+        if (projectile.flags.explosive) {
+          this.explodeAt(projectile.transform.x, projectile.transform.y, projectile.damage * 2 + 8, 62)
+          projectile.active = false
+          break
+        }
         if (projectile.pierceRemaining > 0) {
           projectile.pierceRemaining -= 1
           continue
@@ -347,6 +385,19 @@ export class Run implements RunApi {
         projectile.active = false
         break
       }
+    }
+  }
+
+  // Shared enemy-death path (projectile, poison, explosion, thorns all funnel
+  // here) so effects, splitting and drops stay consistent.
+  private killEnemy(enemy: Enemy): void {
+    enemy.active = false
+    this.particles.burst(enemy.transform.x, enemy.transform.y, 10, "#d08a7a", 120, 22)
+    this.runKillHooks(enemy)
+    if (canSplit(enemy)) {
+      this.splitEnemy(enemy)
+    } else if (Math.random() < 0.12) {
+      this.pickups.push(createPickup("coin", enemy.transform.x, enemy.transform.y))
     }
   }
 
@@ -368,9 +419,15 @@ export class Run implements RunApi {
         continue
       }
       const died = damageBoss(boss, projectile.damage)
+      this.particles.burst(projectile.transform.x, projectile.transform.y, 4, "#ffd9a0", 90, 12)
       if (died) {
         this.defeatBoss()
         return
+      }
+      if (projectile.flags.explosive) {
+        this.explodeAt(projectile.transform.x, projectile.transform.y, projectile.damage * 2 + 8, 62)
+        projectile.active = false
+        continue
       }
       if (projectile.pierceRemaining > 0) {
         projectile.pierceRemaining -= 1
@@ -491,6 +548,199 @@ export class Run implements RunApi {
     this.enemies.length = writeIndex
   }
 
+  // ─── BOMBS & EXPLOSIONS ───
+
+  private placeBomb(): void {
+    if (this.bombs <= 0) return
+    this.bombs -= 1
+    this.activeBombs.push({
+      x: this.player.transform.x,
+      y: this.player.transform.y,
+      fuseTicks: BOMB_FUSE_TICKS,
+    })
+  }
+
+  private updateBombs(): void {
+    for (let index = this.activeBombs.length - 1; index >= 0; index -= 1) {
+      const bomb = this.activeBombs[index]
+      bomb.fuseTicks -= 1
+      if (bomb.fuseTicks > 0) continue
+      this.explodeAt(bomb.x, bomb.y, BOMB_DAMAGE, BOMB_RADIUS)
+      this.activeBombs.splice(index, 1)
+    }
+  }
+
+  private explodeAt(x: number, y: number, damage: number, radius: number): void {
+    this.particles.burst(x, y, 26, "#ffb04a", 240, 26)
+    this.particles.burst(x, y, 14, "#e0e0e0", 200, 20)
+    this.shake(14)
+
+    for (const enemy of this.enemies) {
+      if (!enemy.active) continue
+      if (circlesOverlap(x, y, radius, enemy.transform.x, enemy.transform.y, enemy.body.radius)) {
+        if (damageEnemy(enemy, damage)) this.killEnemy(enemy)
+      }
+    }
+    if (
+      this.boss &&
+      circlesOverlap(x, y, radius, this.boss.transform.x, this.boss.transform.y, this.boss.body.radius)
+    ) {
+      if (damageBoss(this.boss, damage)) this.defeatBoss()
+    }
+
+    // Blast open the reachable player if standing on it.
+    if (circlesOverlap(x, y, radius, this.player.transform.x, this.player.transform.y, this.player.body.radius)) {
+      this.hurtPlayer(1)
+    }
+
+    for (const obstacle of this.currentRoom.obstacles) {
+      if (obstacle.destroyed || !obstacle.destructible) continue
+      if (circlesOverlap(x, y, radius, obstacle.centerX, obstacle.centerY, 4)) {
+        obstacle.destroyed = true
+        this.particles.burst(obstacle.centerX, obstacle.centerY, 8, "#6f5d51", 120, 20)
+        if (Math.random() < 0.35) this.pickups.push(createPickup("coin", obstacle.centerX, obstacle.centerY))
+      }
+    }
+
+    this.tryRevealSecret(x, y)
+  }
+
+  // A blast near a wall that borders a hidden room opens the passage.
+  private tryRevealSecret(x: number, y: number): void {
+    const room = this.currentRoom
+    for (const direction of DIRECTIONS) {
+      if (room.doors[direction]) continue
+      const nx = room.gridX + DIRECTION_DELTA[direction].x
+      const ny = room.gridY + DIRECTION_DELTA[direction].y
+      const neighbor = this.floor.rooms.get(ny * FLOOR_COLUMNS + nx)
+      if (!neighbor || neighbor.kind !== "secret" || neighbor.revealed) continue
+      if (!this.blastNearWall(direction, x, y)) continue
+      room.doors[direction] = true
+      room.doorCount += 1
+      neighbor.revealed = true
+      this.shake(10)
+      return
+    }
+  }
+
+  private blastNearWall(direction: Direction, x: number, y: number): boolean {
+    const nearEdge = 70
+    const nearCentre = TILE * 2
+    switch (direction) {
+      case "north":
+        return y - ROOM_TOP < nearEdge && Math.abs(x - ROOM_CENTER_X) < nearCentre
+      case "south":
+        return ROOM_BOTTOM - y < nearEdge && Math.abs(x - ROOM_CENTER_X) < nearCentre
+      case "east":
+        return ROOM_RIGHT - x < nearEdge && Math.abs(y - ROOM_CENTER_Y) < nearCentre
+      case "west":
+        return x - ROOM_LEFT < nearEdge && Math.abs(y - ROOM_CENTER_Y) < nearCentre
+    }
+  }
+
+  // ─── PICKUPS ───
+
+  private updatePickups(deltaSeconds: number): void {
+    let writeIndex = 0
+    for (let readIndex = 0; readIndex < this.pickups.length; readIndex += 1) {
+      const pickup = this.pickups[readIndex]
+      if (!pickup.active) continue
+      updatePickup(pickup, this.player, deltaSeconds)
+      if (
+        circlesOverlap(
+          pickup.transform.x,
+          pickup.transform.y,
+          pickup.radius,
+          this.player.transform.x,
+          this.player.transform.y,
+          this.player.body.radius,
+        )
+      ) {
+        this.collectPickup(pickup.type)
+        continue
+      }
+      this.pickups[writeIndex] = pickup
+      writeIndex += 1
+    }
+    this.pickups.length = writeIndex
+  }
+
+  private collectPickup(type: PickupType): void {
+    switch (type) {
+      case "heart":
+        this.heal(1)
+        this.particles.burst(this.player.transform.x, this.player.transform.y, 6, "#d8434a", 90, 16)
+        break
+      case "coin":
+        this.coins += 1
+        break
+      case "bomb":
+        this.bombs += 1
+        break
+      case "key":
+        this.keys += 1
+        break
+    }
+  }
+
+  private dropRoomClearReward(): void {
+    const roll = Math.random()
+    const luckBonus = this.player.stats.luck * 0.01
+    if (roll < 0.12 + luckBonus) {
+      this.pickups.push(createPickup("heart", ROOM_CENTER_X, ROOM_CENTER_Y))
+    } else if (roll < 0.5 + luckBonus) {
+      const count = 1 + Math.floor(Math.random() * 2)
+      for (let index = 0; index < count; index += 1) {
+        this.pickups.push(createPickup("coin", ROOM_CENTER_X + (index - 0.5) * 26, ROOM_CENTER_Y))
+      }
+    } else if (roll < 0.58) {
+      this.pickups.push(createPickup("bomb", ROOM_CENTER_X, ROOM_CENTER_Y))
+    } else if (roll < 0.64) {
+      this.pickups.push(createPickup("key", ROOM_CENTER_X, ROOM_CENTER_Y))
+    }
+  }
+
+  // ─── SHOP ───
+
+  private handleShop(): void {
+    const stock = this.currentRoom.shopStock
+    if (!stock) return
+    const player = this.player
+    for (const entry of stock) {
+      if (entry.taken || this.coins < entry.price) continue
+      if (
+        !circlesOverlap(
+          player.transform.x,
+          player.transform.y,
+          player.body.radius,
+          entry.slotX,
+          ROOM_CENTER_Y,
+          PEDESTAL_RADIUS,
+        )
+      ) {
+        continue
+      }
+      this.coins -= entry.price
+      entry.taken = true
+      this.buyShopEntry(entry)
+    }
+  }
+
+  private buyShopEntry(entry: ShopEntry): void {
+    if (entry.kind === "item" && entry.itemId) {
+      const item = itemById(entry.itemId)
+      if (item) this.grantItem(item)
+      return
+    }
+    if (entry.kind === "heart") {
+      this.heal(1)
+      return
+    }
+    if (entry.kind === "bomb") {
+      this.bombs += 1
+    }
+  }
+
   // ─── ITEMS ───
 
   private handleItemPedestal(): void {
@@ -563,6 +813,8 @@ export class Run implements RunApi {
     this.currentRoom = node
     this.enemies = []
     this.boss = null
+    this.pickups = []
+    this.activeBombs.length = 0
     this.trapdoorArmTicks = 0
     this.projectiles.deactivateAll()
 
@@ -578,12 +830,32 @@ export class Run implements RunApi {
         node.pedestalItemId = randomItemId(this.player.items.map((item) => item.id))
       } else if (node.kind === "boss") {
         this.boss = createBoss(this.level)
+      } else if (node.kind === "shop") {
+        node.shopStock = this.buildShopStock()
+      } else if (node.kind === "secret") {
+        this.stockSecretRoom()
       }
       // Every room but the boss room clears the moment it holds no enemies.
       if (node.kind !== "boss" && this.enemies.length === 0) node.cleared = true
     }
 
     this.placePlayerAtEntry(entrySide)
+  }
+
+  private buildShopStock(): ShopEntry[] {
+    const heldIds = this.player.items.map((item) => item.id)
+    return [
+      { kind: "item", itemId: randomItemId(heldIds), price: 15, taken: false, slotX: ROOM_CENTER_X - SHOP_SLOT_OFFSET },
+      { kind: "item", itemId: randomItemId(heldIds), price: 15, taken: false, slotX: ROOM_CENTER_X },
+      { kind: "heart", itemId: null, price: 5, taken: false, slotX: ROOM_CENTER_X + SHOP_SLOT_OFFSET },
+    ]
+  }
+
+  private stockSecretRoom(): void {
+    this.pickups.push(createPickup("heart", ROOM_CENTER_X, ROOM_CENTER_Y - 24))
+    for (let index = 0; index < 3; index += 1) {
+      this.pickups.push(createPickup("coin", ROOM_CENTER_X + (index - 1) * 34, ROOM_CENTER_Y + 24))
+    }
   }
 
   // ─── BOSS / FLOOR PROGRESSION ───
@@ -664,21 +936,71 @@ export class Run implements RunApi {
 
     renderRoom(renderer, this.currentRoom)
     if (this.currentRoom.kind === "item") this.renderPedestal(renderer)
+    if (this.currentRoom.kind === "shop") this.renderShop(renderer)
     if (this.currentRoom.kind === "boss" && this.currentRoom.cleared) this.renderTrapdoor(renderer)
+    for (const pickup of this.pickups) {
+      if (pickup.active) renderPickup(renderer, pickup, interpolation)
+    }
+    this.renderBombs(renderer)
     for (const enemy of this.enemies) {
       if (enemy.active) renderEnemy(renderer, enemy, interpolation)
     }
     if (this.boss) renderBoss(renderer, this.boss, interpolation)
     this.projectiles.render(renderer, interpolation)
     renderPlayer(renderer, this.player, interpolation)
+    this.particles.render(renderer, interpolation)
 
     context.restore()
 
-    renderHud(renderer, this.player, this.coins)
+    renderHud(renderer, this.player, { coins: this.coins, bombs: this.bombs, keys: this.keys })
     renderMinimap(renderer, this.floor, this.currentRoom.index)
     this.renderFloorLabel(renderer)
     if (this.pickupToastTicks > 0) this.renderPickupToast(renderer)
     if (this.transitionTicks > 0) this.renderTransitionFade(renderer)
+  }
+
+  private renderBombs(renderer: Renderer): void {
+    const context = renderer.context
+    for (const bomb of this.activeBombs) {
+      // Flash faster as the fuse burns down.
+      const blink = bomb.fuseTicks % 12 < 6 || bomb.fuseTicks < 20
+      renderer.fillCircle(bomb.x, bomb.y, 10, blink ? "#e05a3a" : "#2c2c30")
+      context.strokeStyle = "#0f0f12"
+      context.lineWidth = 2
+      context.stroke()
+    }
+  }
+
+  private renderShop(renderer: Renderer): void {
+    const stock = this.currentRoom.shopStock
+    if (!stock) return
+    const context = renderer.context
+    for (const entry of stock) {
+      if (entry.taken) continue
+      const color =
+        entry.kind === "item" && entry.itemId
+          ? itemById(entry.itemId)?.color ?? "#c0c0c0"
+          : entry.kind === "heart"
+            ? "#d8434a"
+            : "#2c2c30"
+      renderer.fillRect(entry.slotX - 16, ROOM_CENTER_Y + 8, 32, 10, "#2a2320")
+      renderer.fillCircle(entry.slotX, ROOM_CENTER_Y - 4, PEDESTAL_RADIUS, color)
+      context.lineWidth = 2
+      context.strokeStyle = "#1c1512"
+      context.stroke()
+      const glyph =
+        entry.kind === "item" && entry.itemId ? itemById(entry.itemId)?.glyph ?? "?" : entry.kind === "heart" ? "+" : "B"
+      context.fillStyle = "#1c1512"
+      context.font = "bold 15px monospace"
+      context.textAlign = "center"
+      context.textBaseline = "middle"
+      context.fillText(glyph, entry.slotX, ROOM_CENTER_Y - 3)
+      // Price tag.
+      context.fillStyle = "#e7c14a"
+      context.font = "bold 13px monospace"
+      context.fillText(`${entry.price}`, entry.slotX, ROOM_CENTER_Y + 30)
+      context.textAlign = "left"
+    }
   }
 
   private renderFloorLabel(renderer: Renderer): void {

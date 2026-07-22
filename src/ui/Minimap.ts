@@ -20,6 +20,7 @@ const KIND_COLOR: Record<RoomNode["kind"], string> = {
   boss: "#cf5750",
   item: "#5f86c8",
   shop: "#d0ad4b",
+  secret: "#8a7fd0",
 }
 
 const KNOWN_COLOR = "#4b4038"

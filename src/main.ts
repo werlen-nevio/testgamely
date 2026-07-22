@@ -7,7 +7,8 @@ import { generateFloor } from "./world/Floor"
 import { recomputePlayerStats } from "./entities/Player"
 import { createEnemy } from "./entities/Enemy"
 import { createBoss } from "./entities/Boss"
-import { itemById } from "./items/registry"
+import { itemById, ITEMS } from "./items/registry"
+import { createObstacle } from "./entities/Obstacle"
 
 // ─── BOOTSTRAP ───
 // Wire the subsystems together and hand the fixed-timestep loop the game's
@@ -38,4 +39,6 @@ if (import.meta.env.DEV) {
   debugWindow.itemById = itemById
   debugWindow.createEnemy = createEnemy
   debugWindow.createBoss = createBoss
+  debugWindow.createObstacle = createObstacle
+  debugWindow.ITEMS = ITEMS
 }

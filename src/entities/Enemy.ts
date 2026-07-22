@@ -32,6 +32,8 @@ export interface Enemy {
   moveDirX: number
   moveDirY: number
   generation: number // splitter: 0 big, 1 medium, 2 small (no more splitting)
+  poisonTicks: number // remaining poison duration
+  poisonTimer: number // ticks until the next poison tick of damage
 }
 
 export interface EnemyContext {
@@ -61,7 +63,30 @@ const baseEnemy = (type: EnemyType, x: number, y: number, radius: number, health
   moveDirX: 0,
   moveDirY: 0,
   generation: 0,
+  poisonTicks: 0,
+  poisonTimer: 0,
 })
+
+const POISON_INTERVAL = 14
+const POISON_DAMAGE = 1
+
+// Refreshes an enemy's poison duration (used by poison shots / on-hit items).
+export const applyPoison = (enemy: Enemy, ticks: number): void => {
+  enemy.poisonTicks = Math.max(enemy.poisonTicks, ticks)
+}
+
+// Advances poison one tick. Returns true (and flashes) when a tick of poison
+// damage lands, so the caller can apply it and check for death.
+export const tickPoison = (enemy: Enemy): boolean => {
+  if (enemy.poisonTicks <= 0) return false
+  enemy.poisonTicks -= 1
+  enemy.poisonTimer -= 1
+  if (enemy.poisonTimer > 0) return false
+  enemy.poisonTimer = POISON_INTERVAL
+  enemy.health -= POISON_DAMAGE
+  enemy.hitFlashTicks = Math.max(enemy.hitFlashTicks, 3)
+  return enemy.health <= 0
+}
 
 export const createChaser = (x: number, y: number): Enemy => baseEnemy("chaser", x, y, 16, 6)
 

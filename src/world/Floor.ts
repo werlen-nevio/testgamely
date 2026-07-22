@@ -9,7 +9,15 @@ import type { Obstacle } from "../entities/Obstacle"
 // sprawling tree rather than a blob. The two deepest dead ends become the boss
 // and item rooms; another dead end becomes the shop.
 
-export type RoomKind = "start" | "normal" | "boss" | "item" | "shop"
+export type RoomKind = "start" | "normal" | "boss" | "item" | "shop" | "secret"
+
+export interface ShopEntry {
+  kind: "item" | "heart" | "bomb"
+  itemId: string | null
+  price: number
+  taken: boolean
+  slotX: number
+}
 
 export interface RoomNode {
   index: number
@@ -28,6 +36,10 @@ export interface RoomNode {
   // Item-room pedestal: which item it offers and whether it has been taken.
   pedestalItemId: string | null
   pedestalTaken: boolean
+  // Shop stock, filled the first time a shop room is entered.
+  shopStock: ShopEntry[] | null
+  // Secret rooms start hidden until a bomb blows the connecting wall.
+  revealed: boolean
 }
 
 export interface Floor {
@@ -57,6 +69,8 @@ const createNode = (gridX: number, gridY: number, kind: RoomKind): RoomNode => (
   obstacles: [],
   pedestalItemId: null,
   pedestalTaken: false,
+  shopStock: null,
+  revealed: true,
 })
 
 const shuffled = <T>(values: readonly T[]): T[] => {
@@ -129,8 +143,42 @@ const tryGenerate = (level: number, target: number, skipChance: number): Floor |
   connectDoors(rooms)
   computeDistances(rooms, startIndex)
   if (!assignSpecialRooms(rooms)) return null
+  addSecretRoom(rooms)
 
   return { level, rooms, startIndex }
+}
+
+// Tucks a hidden room into the emptiest well-surrounded gap. It has doors back
+// to its neighbours, but the neighbours have no door to it until a bomb reveals
+// the wall — so it stays off the map until found.
+const addSecretRoom = (rooms: Map<number, RoomNode>): void => {
+  let bestX = -1
+  let bestY = -1
+  let bestCount = 1
+  for (let gridY = 0; gridY < FLOOR_ROWS; gridY += 1) {
+    for (let gridX = 0; gridX < FLOOR_COLUMNS; gridX += 1) {
+      if (rooms.has(indexOf(gridX, gridY))) continue
+      const count = countOccupiedNeighbors(rooms, gridX, gridY)
+      if (count > bestCount) {
+        bestCount = count
+        bestX = gridX
+        bestY = gridY
+      }
+    }
+  }
+  if (bestX < 0) return
+
+  const secret = createNode(bestX, bestY, "secret")
+  secret.revealed = false
+  for (const direction of DIRECTIONS) {
+    const nx = bestX + DIRECTION_DELTA[direction].x
+    const ny = bestY + DIRECTION_DELTA[direction].y
+    if (inBounds(nx, ny) && rooms.has(indexOf(nx, ny))) {
+      secret.doors[direction] = true
+      secret.doorCount += 1
+    }
+  }
+  rooms.set(indexOf(bestX, bestY), secret)
 }
 
 const connectDoors = (rooms: Map<number, RoomNode>): void => {

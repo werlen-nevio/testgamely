@@ -14,9 +14,15 @@ const HEART_SIZE = 22
 const HEART_GAP = 6
 const MARGIN = 14
 
-export const renderHud = (renderer: Renderer, player: Player, coins: number): void => {
+export interface HudCounts {
+  coins: number
+  bombs: number
+  keys: number
+}
+
+export const renderHud = (renderer: Renderer, player: Player, counts: HudCounts): void => {
   renderHearts(renderer, player)
-  renderCoins(renderer, coins)
+  renderCounters(renderer, counts)
   renderItemRow(renderer, player)
 }
 
@@ -36,18 +42,28 @@ const renderHearts = (renderer: Renderer, player: Player): void => {
   }
 }
 
-const renderCoins = (renderer: Renderer, coins: number): void => {
+const renderCounters = (renderer: Renderer, counts: HudCounts): void => {
   const context = renderer.context
   const y = MARGIN + HEART_SIZE + 10
-  renderer.fillCircle(MARGIN + 8, y + 8, 8, "#e7c14a")
-  context.strokeStyle = "#8a6f1f"
-  context.lineWidth = 2
-  context.stroke()
-  context.fillStyle = "#e7e0cf"
-  context.font = "bold 15px monospace"
+  context.font = "bold 14px monospace"
   context.textBaseline = "middle"
   context.textAlign = "left"
-  context.fillText(`x ${coins}`, MARGIN + 22, y + 9)
+
+  // Coin.
+  renderer.fillCircle(MARGIN + 7, y + 8, 7, "#e7c14a")
+  context.fillStyle = "#e7e0cf"
+  context.fillText(String(counts.coins), MARGIN + 18, y + 9)
+
+  // Bomb.
+  renderer.fillCircle(MARGIN + 62, y + 8, 7, "#2c2c30")
+  context.fillStyle = "#e7e0cf"
+  context.fillText(String(counts.bombs), MARGIN + 74, y + 9)
+
+  // Key.
+  renderer.fillCircle(MARGIN + 116, y + 6, 4, "#d8c65a")
+  renderer.fillRect(MARGIN + 115, y + 7, 2, 8, "#d8c65a")
+  context.fillStyle = "#e7e0cf"
+  context.fillText(String(counts.keys), MARGIN + 128, y + 9)
 }
 
 const ITEM_ICON_SIZE = 20

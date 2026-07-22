@@ -33,11 +33,12 @@ interface FloorPalette {
 }
 
 const FLOOR_PALETTES: Record<RoomNode["kind"], FloorPalette> = {
-  start: { base: "#39312e", checker: "#403633", edge: "#4b3d37" },
-  normal: { base: "#39312e", checker: "#403633", edge: "#4b3d37" },
+  start: { base: "#453a34", checker: "#4f423b", edge: "#5c4a40" },
+  normal: { base: "#433832", checker: "#4d403a", edge: "#5a483e" },
   boss: { base: "#3b2a2a", checker: "#472f2f", edge: "#5c3636" },
   item: { base: "#2c3340", checker: "#333c4d", edge: "#3f4a5e" },
   shop: { base: "#3a3526", checker: "#45402d", edge: "#524a34" },
+  secret: { base: "#2e2b33", checker: "#37333d", edge: "#463f52" },
 }
 
 interface DoorRect {

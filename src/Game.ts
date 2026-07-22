@@ -1,6 +1,7 @@
 import type { Renderer } from "./core/Renderer"
 import type { Input } from "./core/Input"
 import { Run } from "./Run"
+import { renderPauseMenu } from "./ui/PauseMenu"
 import { ROOM_LEFT, ROOM_CENTER_X, ROOM_CENTER_Y, ROOM_INNER_WIDTH } from "./constants"
 
 // ─── GAME ───
@@ -15,6 +16,7 @@ export class Game {
   private readonly input: Input
   private scene: Scene = "title"
   private run: Run | null = null
+  private paused = false
 
   constructor(renderer: Renderer, input: Input) {
     this.renderer = renderer
@@ -39,6 +41,10 @@ export class Game {
   private updatePlaying(deltaSeconds: number): void {
     const run = this.run
     if (!run) return
+    if (this.input.wasJustPressed("Escape") || this.input.wasJustPressed("KeyP")) {
+      this.paused = !this.paused
+    }
+    if (this.paused) return
     run.update(this.input, deltaSeconds)
     if (run.playerDead) this.scene = "gameover"
   }
@@ -50,6 +56,7 @@ export class Game {
   private startRun(): void {
     this.run = new Run()
     this.scene = "playing"
+    this.paused = false
   }
 
   // ─── RENDER ───
@@ -61,6 +68,7 @@ export class Game {
         break
       case "playing":
         this.run?.render(this.renderer, interpolation)
+        if (this.paused && this.run) renderPauseMenu(this.renderer, this.run.player, this.run.level)
         break
       case "gameover":
         this.run?.render(this.renderer, interpolation)
@@ -86,6 +94,7 @@ export class Game {
     context.font = "14px monospace"
     context.fillText("Leertaste / Enter  ·  Run starten", ROOM_CENTER_X, ROOM_CENTER_Y + 44)
     context.fillText("WASD bewegen  ·  Pfeiltasten schiessen", ROOM_CENTER_X, ROOM_CENTER_Y + 68)
+    context.fillText("E Bombe  ·  Esc/P Pause", ROOM_CENTER_X, ROOM_CENTER_Y + 90)
     context.textAlign = "left"
   }
 
