@@ -1,5 +1,6 @@
 import type { Renderer } from "../core/Renderer"
 import { clamp } from "../core/math"
+import { COLOR, shade } from "../theme"
 import { TILE, ROOM_LEFT, ROOM_TOP } from "../constants"
 import type { Transform } from "./components"
 
@@ -97,23 +98,23 @@ export const pointHitsObstacle = (x: number, y: number, obstacles: readonly Obst
   return false
 }
 
-const ROCK_FACE = "#5a4b42"
-const ROCK_TOP = "#6f5d51"
-const ROCK_EDGE = "#33291f"
-
+// Built, not living: dark angular stone that swallows light. A raised top-face
+// gives pseudo-height; no glow (ART_DIRECTION §3).
 export const renderObstacle = (renderer: Renderer, obstacle: Obstacle): void => {
   if (obstacle.destroyed) return
   const context = renderer.context
   const inset = 3
-  renderer.fillRect(
-    obstacle.left + inset,
-    obstacle.top + inset,
-    TILE - inset * 2,
-    TILE - inset * 2,
-    ROCK_FACE,
-  )
-  renderer.fillRect(obstacle.left + inset, obstacle.top + inset, TILE - inset * 2, 6, ROCK_TOP)
-  context.lineWidth = 2
-  context.strokeStyle = ROCK_EDGE
-  context.strokeRect(obstacle.left + inset, obstacle.top + inset, TILE - inset * 2, TILE - inset * 2)
+  const size = TILE - inset * 2
+  const left = obstacle.left + inset
+  const top = obstacle.top + inset
+
+  // Drop shadow into the floor.
+  renderer.fillRect(left + 2, top + 4, size, size, COLOR.ink)
+  // Front face.
+  renderer.fillRect(left, top + 5, size, size - 5, shade(COLOR.bgStone, -0.25))
+  // Top face, catching a sliver of the ambient.
+  renderer.fillRect(left, top, size, 7, shade(COLOR.bgStone, 0.18))
+  context.strokeStyle = COLOR.ink
+  context.lineWidth = 1.5
+  context.strokeRect(left, top, size, size)
 }

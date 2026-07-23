@@ -12,7 +12,8 @@ html,
 body {
   width: 100%;
   height: 100%;
-  background: #0c0a09;
+  /* Mirrors --bg-abyss from ART_DIRECTION.md (§2). */
+  background: #050c16;
   overflow: hidden;
 }
 
@@ -25,9 +26,10 @@ body {
 
 canvas#game {
   display: block;
-  background: #211b1a;
+  /* Mirrors --bg-abyss from ART_DIRECTION.md (§2). */
+  background: #050c16;
   box-shadow:
-    0 0 0 1px #000,
-    0 24px 60px rgba(0, 0, 0, 0.6);
+    0 0 0 1px #03070d,
+    0 24px 70px rgba(0, 0, 0, 0.7);
   touch-action: none;
 }

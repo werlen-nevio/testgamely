@@ -1,7 +1,8 @@
 import type { Renderer } from "../core/Renderer"
-import type { RoomNode } from "./Floor"
-import { DIRECTIONS, type Direction } from "./directions"
+import type { Floor, RoomNode } from "./Floor"
+import { DIRECTIONS, DIRECTION_DELTA, type Direction } from "./directions"
 import { renderObstacle } from "../entities/Obstacle"
+import { COLOR, shade, mix, rgba } from "../theme"
 import {
   TILE,
   ROOM_COLS,
@@ -16,29 +17,107 @@ import {
   ROOM_INNER_HEIGHT,
   VIEW_WIDTH,
   VIEW_HEIGHT,
+  FLOOR_COLUMNS,
   DOOR_HALF_SPAN,
 } from "../constants"
 
 // ─── ROOM RENDERING ───
-// Draws the current room: walls, a kind-tinted floor with a faint checker, the
-// obstacles, and the doorways (barred while the room is uncleared, open once it
-// is). Room graph/state lives in Floor.ts — this module only paints it.
+// Draws the current room with depth: an abyssal backdrop, a floor lit by a soft
+// central pool, raised stone walls, obstacles with a top-face, and doorways
+// whose state and destination read at a glance. Every colour is a theme token
+// or a mix/shade of one; floors tint the same palette per depth.
 
-const WALL_COLOR = "#1a1513"
+// Each floor blends the base toward an accent so depths feel distinct while
+// staying in-palette. Cycles, darkening deeper.
+const FLOOR_ACCENTS = [COLOR.bio, COLOR.brood, COLOR.caster]
 
-interface FloorPalette {
-  base: string
-  checker: string
-  edge: string
+interface FloorTheme {
+  floor: string
+  floorEdge: string
+  mist: string
+  wall: string
+  wallEdge: string
 }
 
-const FLOOR_PALETTES: Record<RoomNode["kind"], FloorPalette> = {
-  start: { base: "#453a34", checker: "#4f423b", edge: "#5c4a40" },
-  normal: { base: "#433832", checker: "#4d403a", edge: "#5a483e" },
-  boss: { base: "#3b2a2a", checker: "#472f2f", edge: "#5c3636" },
-  item: { base: "#2c3340", checker: "#333c4d", edge: "#3f4a5e" },
-  shop: { base: "#3a3526", checker: "#45402d", edge: "#524a34" },
-  secret: { base: "#2e2b33", checker: "#37333d", edge: "#463f52" },
+const floorTheme = (level: number): FloorTheme => {
+  const accent = FLOOR_ACCENTS[(level - 1) % FLOOR_ACCENTS.length]
+  const depth = Math.min(0.4, ((level - 1) / FLOOR_ACCENTS.length | 0) * 0.12)
+  const floorBase = shade(mix(COLOR.bgDeep, accent, 0.14), -depth)
+  return {
+    floor: floorBase,
+    floorEdge: shade(floorBase, 0.12),
+    mist: mix(COLOR.bgMist, accent, 0.35),
+    wall: shade(mix(COLOR.bgStone, accent, 0.06), -depth),
+    wallEdge: mix(COLOR.bgStone, accent, 0.2),
+  }
+}
+
+// Kind of the room a door leads to, so its arch can be colour-coded.
+const neighborKind = (floor: Floor, room: RoomNode, direction: Direction): RoomNode["kind"] | null => {
+  const nx = room.gridX + DIRECTION_DELTA[direction].x
+  const ny = room.gridY + DIRECTION_DELTA[direction].y
+  return floor.rooms.get(ny * FLOOR_COLUMNS + nx)?.kind ?? null
+}
+
+export const renderRoom = (renderer: Renderer, room: RoomNode, floor: Floor): void => {
+  const context = renderer.context
+  const theme = floorTheme(floor.level)
+
+  // Abyss backdrop, oversized so a camera nudge never reveals the void.
+  renderer.fillRect(-80, -80, VIEW_WIDTH + 160, VIEW_HEIGHT + 160, COLOR.bgAbyss)
+
+  // Raised wall band around the play area.
+  renderer.fillRect(
+    ROOM_LEFT - TILE,
+    ROOM_TOP - TILE,
+    ROOM_INNER_WIDTH + TILE * 2,
+    ROOM_INNER_HEIGHT + TILE * 2,
+    theme.wall,
+  )
+
+  // Floor.
+  renderer.fillRect(ROOM_LEFT, ROOM_TOP, ROOM_INNER_WIDTH, ROOM_INNER_HEIGHT, theme.floor)
+
+  // Faint tile grid, darker than the floor so it reads as grout.
+  context.strokeStyle = shade(theme.floor, -0.25)
+  context.lineWidth = 1
+  context.beginPath()
+  for (let col = 1; col < ROOM_COLS; col += 1) {
+    context.moveTo(ROOM_LEFT + col * TILE, ROOM_TOP)
+    context.lineTo(ROOM_LEFT + col * TILE, ROOM_BOTTOM)
+  }
+  for (let row = 1; row < ROOM_ROWS; row += 1) {
+    context.moveTo(ROOM_LEFT, ROOM_TOP + row * TILE)
+    context.lineTo(ROOM_RIGHT, ROOM_TOP + row * TILE)
+  }
+  context.stroke()
+
+  // Soft central light pool — bioluminescence welling up through the floor.
+  const pool = context.createRadialGradient(
+    ROOM_CENTER_X,
+    ROOM_CENTER_Y,
+    20,
+    ROOM_CENTER_X,
+    ROOM_CENTER_Y,
+    ROOM_INNER_WIDTH * 0.55,
+  )
+  pool.addColorStop(0, rgba(theme.mist, 0.16))
+  pool.addColorStop(1, rgba(theme.mist, 0))
+  context.fillStyle = pool
+  context.fillRect(ROOM_LEFT, ROOM_TOP, ROOM_INNER_WIDTH, ROOM_INNER_HEIGHT)
+
+  // Inner wall edge — a lip of lighter stone for depth.
+  context.strokeStyle = theme.wallEdge
+  context.lineWidth = 3
+  context.strokeRect(ROOM_LEFT + 1.5, ROOM_TOP + 1.5, ROOM_INNER_WIDTH - 3, ROOM_INNER_HEIGHT - 3)
+
+  for (const direction of DIRECTIONS) {
+    if (room.doors[direction]) {
+      drawDoor(renderer, direction, room.cleared, neighborKind(floor, room, direction), theme)
+    }
+  }
+
+  for (const obstacle of room.obstacles) renderObstacle(renderer, obstacle)
 }
 
 interface DoorRect {
@@ -52,88 +131,62 @@ const doorRect = (direction: Direction): DoorRect => {
   const span = DOOR_HALF_SPAN * 2
   switch (direction) {
     case "north":
-      return { x: ROOM_CENTER_X - DOOR_HALF_SPAN, y: 0, width: span, height: ROOM_TOP }
+      return { x: ROOM_CENTER_X - DOOR_HALF_SPAN, y: ROOM_TOP - TILE, width: span, height: TILE }
     case "south":
-      return { x: ROOM_CENTER_X - DOOR_HALF_SPAN, y: ROOM_BOTTOM, width: span, height: VIEW_HEIGHT - ROOM_BOTTOM }
+      return { x: ROOM_CENTER_X - DOOR_HALF_SPAN, y: ROOM_BOTTOM, width: span, height: TILE }
     case "east":
-      return { x: ROOM_RIGHT, y: ROOM_CENTER_Y - DOOR_HALF_SPAN, width: VIEW_WIDTH - ROOM_RIGHT, height: span }
+      return { x: ROOM_RIGHT, y: ROOM_CENTER_Y - DOOR_HALF_SPAN, width: TILE, height: span }
     case "west":
-      return { x: 0, y: ROOM_CENTER_Y - DOOR_HALF_SPAN, width: ROOM_LEFT, height: span }
+      return { x: ROOM_LEFT - TILE, y: ROOM_CENTER_Y - DOOR_HALF_SPAN, width: TILE, height: span }
   }
 }
 
-export const renderRoom = (renderer: Renderer, room: RoomNode): void => {
-  const context = renderer.context
-  const palette = FLOOR_PALETTES[room.kind]
-
-  renderer.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT, WALL_COLOR)
-  renderer.fillRect(ROOM_LEFT, ROOM_TOP, ROOM_INNER_WIDTH, ROOM_INNER_HEIGHT, palette.base)
-
-  context.fillStyle = palette.checker
-  for (let row = 0; row < ROOM_ROWS; row += 1) {
-    for (let col = 0; col < ROOM_COLS; col += 1) {
-      if ((row + col) % 2 === 0) continue
-      context.fillRect(ROOM_LEFT + col * TILE, ROOM_TOP + row * TILE, TILE, TILE)
-    }
-  }
-
-  for (const direction of DIRECTIONS) {
-    if (room.doors[direction]) drawDoor(renderer, direction, room.cleared, palette)
-  }
-
-  context.strokeStyle = palette.edge
-  context.lineWidth = 4
-  context.strokeRect(ROOM_LEFT + 2, ROOM_TOP + 2, ROOM_INNER_WIDTH - 4, ROOM_INNER_HEIGHT - 4)
-
-  for (const obstacle of room.obstacles) renderObstacle(renderer, obstacle)
+// Destination-coded arch colour: boss = danger, shop = warm, else bio.
+const doorAccent = (kind: RoomNode["kind"] | null): string => {
+  if (kind === "boss") return COLOR.danger
+  if (kind === "shop") return COLOR.playerGlow
+  return COLOR.bio
 }
-
-const DOOR_OPEN_COLOR = "#120f0e"
-const DOOR_FRAME_COLOR = "#6a564a"
-const DOOR_CLOSED_COLOR = "#7c6252"
-const DOOR_CLOSED_BAR = "#4a382e"
 
 const drawDoor = (
   renderer: Renderer,
   direction: Direction,
   open: boolean,
-  palette: FloorPalette,
+  kind: RoomNode["kind"] | null,
+  theme: FloorTheme,
 ): void => {
   const rect = doorRect(direction)
   const context = renderer.context
+  const accent = doorAccent(kind)
+  const centerX = rect.x + rect.width / 2
+  const centerY = rect.y + rect.height / 2
 
-  // Frame around the opening.
-  renderer.fillRect(rect.x - 3, rect.y - 3, rect.width + 6, rect.height + 6, DOOR_FRAME_COLOR)
+  // Dark threshold set into the wall.
+  renderer.fillRect(rect.x, rect.y, rect.width, rect.height, COLOR.ink)
 
   if (open) {
-    // Carry the floor into the threshold and leave a dark mouth beyond it.
-    renderer.fillRect(rect.x, rect.y, rect.width, rect.height, palette.base)
-    const mouthInset = 6
-    renderer.fillRect(
-      rect.x + (direction === "east" || direction === "west" ? rect.width - mouthInset : mouthInset),
-      rect.y + (direction === "north" || direction === "south" ? rect.height - mouthInset : mouthInset),
-      direction === "east" || direction === "west" ? mouthInset : rect.width - mouthInset * 2,
-      direction === "north" || direction === "south" ? mouthInset : rect.height - mouthInset * 2,
-      DOOR_OPEN_COLOR,
-    )
+    // Glowing arch + open mouth.
+    renderer.additive(() => renderer.glowCircle(centerX, centerY, DOOR_HALF_SPAN * 0.7, accent, 16))
+    context.strokeStyle = accent
+    context.lineWidth = 3
+    context.strokeRect(rect.x + 2, rect.y + 2, rect.width - 4, rect.height - 4)
     return
   }
 
-  // Closed: a barred slab.
-  renderer.fillRect(rect.x, rect.y, rect.width, rect.height, DOOR_CLOSED_COLOR)
-  context.strokeStyle = DOOR_CLOSED_BAR
+  // Closed: a barred slab in stone, tinted by the destination so a boss/shop
+  // door still reads while locked.
+  renderer.fillRect(rect.x + 3, rect.y + 3, rect.width - 6, rect.height - 6, shade(theme.wall, 0.12))
+  context.strokeStyle = shade(accent, -0.2)
   context.lineWidth = 3
   if (direction === "north" || direction === "south") {
-    const midX = rect.x + rect.width / 2
     context.beginPath()
-    context.moveTo(midX, rect.y + 2)
-    context.lineTo(midX, rect.y + rect.height - 2)
+    context.moveTo(centerX, rect.y + 4)
+    context.lineTo(centerX, rect.y + rect.height - 4)
     context.stroke()
   } else {
-    const midY = rect.y + rect.height / 2
     context.beginPath()
-    context.moveTo(rect.x + 2, midY)
-    context.lineTo(rect.x + rect.width - 2, midY)
+    context.moveTo(rect.x + 4, centerY)
+    context.lineTo(rect.x + rect.width - 4, centerY)
     context.stroke()
   }
 }

@@ -2,6 +2,7 @@ import type { Renderer } from "../core/Renderer"
 import type { Floor, RoomNode } from "../world/Floor"
 import { DIRECTIONS, DIRECTION_DELTA } from "../world/directions"
 import { FLOOR_COLUMNS, VIEW_WIDTH } from "../constants"
+import { COLOR, shade, rgba } from "../theme"
 
 // ─── MINIMAP ───
 // Top-right overview of the floor. Three visibility states are distinguishable:
@@ -15,17 +16,17 @@ const MARGIN = 12
 const PAD = 8
 
 const KIND_COLOR: Record<RoomNode["kind"], string> = {
-  start: "#9ec6a0",
-  normal: "#b6a48f",
-  boss: "#cf5750",
-  item: "#5f86c8",
-  shop: "#d0ad4b",
-  secret: "#8a7fd0",
+  start: COLOR.playerCore,
+  normal: shade(COLOR.bgMist, 0.35),
+  boss: COLOR.danger,
+  item: COLOR.bio,
+  shop: COLOR.playerGlow,
+  secret: COLOR.brood,
 }
 
-const KNOWN_COLOR = "#4b4038"
-const PANEL_COLOR = "rgba(12, 10, 9, 0.55)"
-const CURRENT_OUTLINE = "#f4ead0"
+const KNOWN_COLOR = shade(COLOR.bgStone, 0.1)
+const PANEL_COLOR = rgba(COLOR.ink, 0.55)
+const CURRENT_OUTLINE = COLOR.flash
 
 export const renderMinimap = (renderer: Renderer, floor: Floor, currentIndex: number): void => {
   const rooms = floor.rooms

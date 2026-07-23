@@ -37,6 +37,42 @@ export class Renderer {
     this.context.fillRect(x, y, width, height)
   }
 
+  strokeCircle(x: number, y: number, radius: number, color: string, lineWidth: number): void {
+    const context = this.context
+    context.strokeStyle = color
+    context.lineWidth = lineWidth
+    context.beginPath()
+    context.arc(x, y, radius, 0, Math.PI * 2)
+    context.stroke()
+  }
+
+  // ─── GLOW ───
+  // A soft bloom around an accent, via shadowBlur. Used sparingly (only on the
+  // player, bio, danger and boss accents — never on structure). Keep counts low;
+  // shadowBlur is not free.
+
+  glowCircle(x: number, y: number, radius: number, color: string, blur: number): void {
+    const context = this.context
+    context.save()
+    context.shadowColor = color
+    context.shadowBlur = blur
+    context.fillStyle = color
+    context.beginPath()
+    context.arc(x, y, radius, 0, Math.PI * 2)
+    context.fill()
+    context.restore()
+  }
+
+  // Runs a draw callback in additive ("lighter") blend mode, so overlapping
+  // lights accumulate into brightness instead of painting over each other.
+  additive(draw: () => void): void {
+    const context = this.context
+    context.save()
+    context.globalCompositeOperation = "lighter"
+    draw()
+    context.restore()
+  }
+
   // ─── RESOLUTION & FIT ───
 
   private readonly applyResolution = (): void => {
@@ -44,7 +80,8 @@ export class Renderer {
     this.canvas.width = Math.round(VIEW_WIDTH * pixelRatio)
     this.canvas.height = Math.round(VIEW_HEIGHT * pixelRatio)
     this.context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0)
-    this.context.imageSmoothingEnabled = false
+    // Smooth on: the look is glow-forward vector art, not pixel art.
+    this.context.imageSmoothingEnabled = true
 
     const scale = Math.min(
       window.innerWidth / VIEW_WIDTH,

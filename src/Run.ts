@@ -2,7 +2,11 @@ import type { Renderer } from "./core/Renderer"
 import type { Input } from "./core/Input"
 import { SpatialGrid } from "./core/SpatialGrid"
 import { circlesOverlap } from "./core/collision"
-import { approach } from "./core/math"
+import { approach, lerp } from "./core/math"
+import { Camera } from "./core/Camera"
+import { TRAUMA, HITSTOP, HURT, CAMERA, HIT_KNOCKBACK } from "./feel"
+import { COLOR, shade, rgba } from "./theme"
+import { itemColor } from "./items/Item"
 import {
   ROOM_CENTER_X,
   ROOM_CENTER_Y,
@@ -36,6 +40,7 @@ import {
   canSplit,
   tickPoison,
   applyPoison,
+  enemyColor,
   type Enemy,
   type EnemyContext,
 } from "./entities/Enemy"
@@ -59,6 +64,8 @@ import { DIRECTIONS, DIRECTION_DELTA, OPPOSITE_DIRECTION, type Direction } from 
 import { renderRoom } from "./world/Room"
 import { renderHud } from "./ui/HUD"
 import { renderMinimap } from "./ui/Minimap"
+import { Grain, renderVignette } from "./ui/postfx"
+import { FONT_UI } from "./ui/fonts"
 import { itemById, randomItemId } from "./items/registry"
 import type { Item, RunApi } from "./items/Item"
 
@@ -116,7 +123,13 @@ export class Run implements RunApi {
   // inherit the primary's final flags.
   private readonly shotBuffer: Projectile[] = []
   private readonly activeBombs: ActiveBomb[] = []
-  private shakeStrength = 0
+  readonly camera = new Camera()
+  private readonly grain = new Grain()
+  private hitstopTicks = 0
+  private slowmoTicks = 0
+  private slowmoPhase = 0
+  private hurtPulseTicks = 0
+  private grainPhase = 0
   private trapdoorArmTicks = 0
   private pickupToastText = ""
   private pickupToastTicks = 0
@@ -131,19 +144,50 @@ export class Run implements RunApi {
   // ─── UPDATE ───
 
   update(input: Input, deltaSeconds: number): void {
+    // Camera advances every frame — even while the sim is frozen — so shake and
+    // follow stay smooth through hit-stop.
+    const aim = input.aimVector()
+    const followX = (this.player.transform.x - ROOM_CENTER_X) * 0.06 + aim.x * CAMERA.lookAhead
+    const followY = (this.player.transform.y - ROOM_CENTER_Y) * 0.06 + aim.y * CAMERA.lookAhead
+    this.camera.update(deltaSeconds, followX, followY)
+
     if (this.pickupToastTicks > 0) this.pickupToastTicks -= 1
-    if (this.shakeStrength > 0.1) this.shakeStrength *= 0.85
-    else this.shakeStrength = 0
+    if (this.hurtPulseTicks > 0) this.hurtPulseTicks -= 1
 
     if (this.transitionTicks > 0) {
       this.transitionTicks -= 1
       return
     }
 
+    // Hit-stop: a few frames of total freeze so a heavy blow lands.
+    if (this.hitstopTicks > 0) {
+      this.hitstopTicks -= 1
+      return
+    }
+
+    // Slow-motion (after a player hit): advance the sim only every Nth tick.
+    if (this.slowmoTicks > 0) {
+      this.slowmoTicks -= 1
+      this.slowmoPhase = (this.slowmoPhase + 1) % HURT.slowmoEvery
+      if (this.slowmoPhase !== 0) return
+    }
+
     updatePlayer(this.player, input, deltaSeconds)
     resolveCircleAgainstObstacles(this.player.transform, this.player.body.radius, this.currentRoom.obstacles)
     this.handleShooting(input)
     if (input.wasJustPressed("KeyE")) this.placeBomb()
+
+    // Footstep dust when moving with some pace.
+    const speed = Math.hypot(this.player.transform.velocityX, this.player.transform.velocityY)
+    if (speed > 120 && this.player.animTicks % 6 === 0) {
+      this.particles.dust(
+        this.player.transform.x,
+        this.player.transform.y + this.player.body.radius * 0.6,
+        this.player.transform.velocityX,
+        this.player.transform.velocityY,
+        shade(COLOR.bgMist, 0.2),
+      )
+    }
 
     this.enemyContext.obstacles = this.currentRoom.obstacles
     for (const enemy of this.enemies) {
@@ -175,6 +219,7 @@ export class Run implements RunApi {
       this.currentRoom.cleared = true
       this.runRoomClearHooks()
       this.dropRoomClearReward()
+      this.celebrateRoomClear()
     }
 
     this.handleItemPedestal()
@@ -255,8 +300,9 @@ export class Run implements RunApi {
     if (this.boss && damageBoss(this.boss, amount)) this.defeatBoss()
   }
 
-  shake(strength: number): void {
-    this.shakeStrength = Math.max(this.shakeStrength, strength)
+  // Item-facing: adds camera trauma (0..1). Screenshake scales with trauma².
+  shake(amount: number): void {
+    this.camera.addTrauma(amount)
   }
 
   // ─── SHOOTING & ITEM HOOKS ───
@@ -285,6 +331,10 @@ export class Run implements RunApi {
     })
     player.shootCooldownTicks = Math.max(1, Math.round(TICKS_PER_SECOND / stats.fireRate))
     if (!primary) return
+
+    // Muzzle flash + a touch of trauma so every shot has a small kick.
+    this.particles.burst(primary.transform.x, primary.transform.y, 3, COLOR.bio, 70, 8)
+    this.camera.addTrauma(TRAUMA.shoot)
 
     this.shotBuffer.push(primary)
     for (const item of player.items) {
@@ -369,7 +419,15 @@ export class Run implements RunApi {
 
         const died = damageEnemy(enemy, projectile.damage)
         if (projectile.flags.poison) applyPoison(enemy, 90)
-        this.particles.burst(projectile.transform.x, projectile.transform.y, 4, "#ffd9a0", 90, 12)
+        this.knockback(enemy, projectile.transform.velocityX, projectile.transform.velocityY)
+        this.particles.impact(
+          projectile.transform.x,
+          projectile.transform.y,
+          projectile.transform.velocityX,
+          projectile.transform.velocityY,
+          COLOR.bio,
+        )
+        this.camera.addTrauma(TRAUMA.enemyHit)
         this.runHitHooks(projectile, enemy)
         if (died) this.killEnemy(enemy)
 
@@ -388,11 +446,20 @@ export class Run implements RunApi {
     }
   }
 
+  // Nudges an enemy along a hit direction so a shot visibly connects.
+  private knockback(enemy: Enemy, velocityX: number, velocityY: number): void {
+    const speed = Math.hypot(velocityX, velocityY) || 1
+    enemy.transform.x += (velocityX / speed) * HIT_KNOCKBACK
+    enemy.transform.y += (velocityY / speed) * HIT_KNOCKBACK
+  }
+
   // Shared enemy-death path (projectile, poison, explosion, thorns all funnel
   // here) so effects, splitting and drops stay consistent.
   private killEnemy(enemy: Enemy): void {
     enemy.active = false
-    this.particles.burst(enemy.transform.x, enemy.transform.y, 10, "#d08a7a", 120, 22)
+    this.particles.burst(enemy.transform.x, enemy.transform.y, 14, enemyColor(enemy), 130, 24)
+    this.camera.addTrauma(TRAUMA.enemyKill)
+    this.hitstopTicks = Math.max(this.hitstopTicks, HITSTOP.kill)
     this.runKillHooks(enemy)
     if (canSplit(enemy)) {
       this.splitEnemy(enemy)
@@ -418,8 +485,17 @@ export class Run implements RunApi {
       ) {
         continue
       }
+      const phaseBefore = boss.phase
       const died = damageBoss(boss, projectile.damage)
-      this.particles.burst(projectile.transform.x, projectile.transform.y, 4, "#ffd9a0", 90, 12)
+      this.particles.impact(
+        projectile.transform.x,
+        projectile.transform.y,
+        projectile.transform.velocityX,
+        projectile.transform.velocityY,
+        COLOR.bio,
+      )
+      this.camera.addTrauma(TRAUMA.enemyHit)
+      if (boss.phase !== phaseBefore) this.onBossPhaseChange()
       if (died) {
         this.defeatBoss()
         return
@@ -499,8 +575,16 @@ export class Run implements RunApi {
 
   private hurtPlayer(amount: number): void {
     const player = this.player
+    const wasInvulnerable = player.invulnerableTicks > 0
     damagePlayer(player, amount)
-    this.shake(6)
+    if (wasInvulnerable) return
+    // The full hit reaction: trauma, a freeze, a beat of slow-mo and a red pulse.
+    this.camera.addTrauma(TRAUMA.playerHit)
+    this.hitstopTicks = Math.max(this.hitstopTicks, HITSTOP.playerHit)
+    this.slowmoTicks = HURT.slowmoTicks
+    this.slowmoPhase = 0
+    this.hurtPulseTicks = HURT.pulseTicks
+    this.particles.burst(player.transform.x, player.transform.y, 10, COLOR.hurt, 150, 20)
     for (const item of player.items) {
       item.onDamageTaken?.({ run: this, player, amount })
     }
@@ -571,9 +655,11 @@ export class Run implements RunApi {
   }
 
   private explodeAt(x: number, y: number, damage: number, radius: number): void {
-    this.particles.burst(x, y, 26, "#ffb04a", 240, 26)
-    this.particles.burst(x, y, 14, "#e0e0e0", 200, 20)
-    this.shake(14)
+    this.particles.burst(x, y, 26, COLOR.playerGlow, 240, 26)
+    this.particles.burst(x, y, 14, COLOR.danger, 200, 20)
+    this.particles.shockwave(x, y, radius, COLOR.playerGlow)
+    this.camera.addTrauma(TRAUMA.explosion)
+    this.hitstopTicks = Math.max(this.hitstopTicks, HITSTOP.heavyKill)
 
     for (const enemy of this.enemies) {
       if (!enemy.active) continue
@@ -597,7 +683,7 @@ export class Run implements RunApi {
       if (obstacle.destroyed || !obstacle.destructible) continue
       if (circlesOverlap(x, y, radius, obstacle.centerX, obstacle.centerY, 4)) {
         obstacle.destroyed = true
-        this.particles.burst(obstacle.centerX, obstacle.centerY, 8, "#6f5d51", 120, 20)
+        this.particles.burst(obstacle.centerX, obstacle.centerY, 8, COLOR.bgMist, 120, 20)
         if (Math.random() < 0.35) this.pickups.push(createPickup("coin", obstacle.centerX, obstacle.centerY))
       }
     }
@@ -618,7 +704,8 @@ export class Run implements RunApi {
       room.doors[direction] = true
       room.doorCount += 1
       neighbor.revealed = true
-      this.shake(10)
+      this.camera.addTrauma(0.28)
+      this.particles.burst(x, y, 16, COLOR.bio, 160, 24)
       return
     }
   }
@@ -669,7 +756,7 @@ export class Run implements RunApi {
     switch (type) {
       case "heart":
         this.heal(1)
-        this.particles.burst(this.player.transform.x, this.player.transform.y, 6, "#d8434a", 90, 16)
+        this.particles.burst(this.player.transform.x, this.player.transform.y, 6, COLOR.playerGlow, 90, 16)
         break
       case "coin":
         this.coins += 1
@@ -697,6 +784,24 @@ export class Run implements RunApi {
       this.pickups.push(createPickup("bomb", ROOM_CENTER_X, ROOM_CENTER_Y))
     } else if (roll < 0.64) {
       this.pickups.push(createPickup("key", ROOM_CENTER_X, ROOM_CENTER_Y))
+    }
+  }
+
+  // The room-cleared beat: a soft zoom-pulse and a bio bloom at each opening
+  // door so the doors "unlock" with a flourish.
+  private celebrateRoomClear(): void {
+    this.camera.addTrauma(TRAUMA.roomClear)
+    this.camera.pulseZoom(CAMERA.zoomPulse)
+    const doorPoints: Record<Direction, [number, number]> = {
+      north: [ROOM_CENTER_X, ROOM_TOP],
+      south: [ROOM_CENTER_X, ROOM_BOTTOM],
+      east: [ROOM_RIGHT, ROOM_CENTER_Y],
+      west: [ROOM_LEFT, ROOM_CENTER_Y],
+    }
+    for (const direction of DIRECTIONS) {
+      if (!this.currentRoom.doors[direction]) continue
+      const [x, y] = doorPoints[direction]
+      this.particles.burst(x, y, 10, COLOR.bio, 130, 22)
     }
   }
 
@@ -860,11 +965,26 @@ export class Run implements RunApi {
 
   // ─── BOSS / FLOOR PROGRESSION ───
 
+  private onBossPhaseChange(): void {
+    const boss = this.boss
+    if (!boss) return
+    this.camera.addTrauma(TRAUMA.bossPhase)
+    this.hitstopTicks = Math.max(this.hitstopTicks, HITSTOP.bossPhase)
+    this.particles.burst(boss.transform.x, boss.transform.y, 22, COLOR.bossHot, 180, 26)
+  }
+
   private defeatBoss(): void {
+    const boss = this.boss
     this.boss = null
     this.currentRoom.cleared = true
     this.trapdoorArmTicks = 45 // brief beat before the exit is walkable
-    this.shake(16)
+    this.camera.addTrauma(TRAUMA.bossDeath)
+    this.camera.pulseZoom(0.06)
+    this.hitstopTicks = Math.max(this.hitstopTicks, HITSTOP.bossDeath)
+    if (boss) {
+      this.particles.burst(boss.transform.x, boss.transform.y, 40, COLOR.bossHot, 300, 34)
+      this.particles.shockwave(boss.transform.x, boss.transform.y, 120, COLOR.bossHot)
+    }
     this.runRoomClearHooks()
   }
 
@@ -926,15 +1046,12 @@ export class Run implements RunApi {
 
   render(renderer: Renderer, interpolation: number): void {
     const context = renderer.context
+    renderer.clear(COLOR.bgAbyss)
 
-    context.save()
-    if (this.shakeStrength > 0) {
-      const offsetX = (Math.random() * 2 - 1) * this.shakeStrength
-      const offsetY = (Math.random() * 2 - 1) * this.shakeStrength
-      context.translate(offsetX, offsetY)
-    }
+    // ─── WORLD (moves with the camera) ───
+    this.camera.begin(context)
 
-    renderRoom(renderer, this.currentRoom)
+    renderRoom(renderer, this.currentRoom, this.floor)
     if (this.currentRoom.kind === "item") this.renderPedestal(renderer)
     if (this.currentRoom.kind === "shop") this.renderShop(renderer)
     if (this.currentRoom.kind === "boss" && this.currentRoom.cleared) this.renderTrapdoor(renderer)
@@ -947,69 +1064,90 @@ export class Run implements RunApi {
     }
     if (this.boss) renderBoss(renderer, this.boss, interpolation)
     this.projectiles.render(renderer, interpolation)
+
+    // The player is the light in the room: darken everything away from them,
+    // then draw the player and particles on top at full brightness.
+    this.renderPlayerLight(renderer, interpolation)
     renderPlayer(renderer, this.player, interpolation)
     this.particles.render(renderer, interpolation)
 
-    context.restore()
+    this.camera.end(context)
+
+    // ─── SCREEN-SPACE OVERLAYS (never shaken) ───
+    renderVignette(renderer)
+    this.grain.render(renderer, (this.grainPhase % 5) * 7, ((this.grainPhase * 3) % 5) * 7)
+    this.grainPhase += 1
 
     renderHud(renderer, this.player, { coins: this.coins, bombs: this.bombs, keys: this.keys })
     renderMinimap(renderer, this.floor, this.currentRoom.index)
     this.renderFloorLabel(renderer)
     if (this.pickupToastTicks > 0) this.renderPickupToast(renderer)
+    if (this.hurtPulseTicks > 0) this.renderHurtPulse(renderer)
     if (this.transitionTicks > 0) this.renderTransitionFade(renderer)
   }
 
-  private renderBombs(renderer: Renderer): void {
+  // A soft radial that keeps the player's surroundings lit and lets the room
+  // fall into darkness at the edges — the core of the abyssal mood.
+  private renderPlayerLight(renderer: Renderer, interpolation: number): void {
+    const x = lerp(this.player.transform.previousX, this.player.transform.x, interpolation)
+    const y = lerp(this.player.transform.previousY, this.player.transform.y, interpolation)
     const context = renderer.context
+    const gradient = context.createRadialGradient(x, y, 60, x, y, 340)
+    gradient.addColorStop(0, rgba(COLOR.ink, 0))
+    gradient.addColorStop(1, rgba(COLOR.ink, 0.55))
+    context.fillStyle = gradient
+    context.fillRect(ROOM_LEFT, ROOM_TOP, ROOM_RIGHT - ROOM_LEFT, ROOM_BOTTOM - ROOM_TOP)
+  }
+
+  private renderHurtPulse(renderer: Renderer): void {
+    const alpha = (this.hurtPulseTicks / HURT.pulseTicks) * HURT.pulseAlpha
+    renderer.context.fillStyle = rgba(COLOR.hurt, alpha)
+    renderer.context.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT)
+  }
+
+  private renderBombs(renderer: Renderer): void {
     for (const bomb of this.activeBombs) {
-      // Flash faster as the fuse burns down.
+      // Flash toward the danger colour faster as the fuse burns down.
       const blink = bomb.fuseTicks % 12 < 6 || bomb.fuseTicks < 20
-      renderer.fillCircle(bomb.x, bomb.y, 10, blink ? "#e05a3a" : "#2c2c30")
-      context.strokeStyle = "#0f0f12"
-      context.lineWidth = 2
-      context.stroke()
+      renderer.fillCircle(bomb.x, bomb.y, 10, shade(COLOR.bgStone, 0.1))
+      if (blink) renderer.glowCircle(bomb.x, bomb.y, 5, COLOR.danger, 14)
+      renderer.strokeCircle(bomb.x, bomb.y, 10, COLOR.ink, 2)
     }
+  }
+
+  // A glowing pedestal chip — item rooms and shops share the look.
+  private renderChip(renderer: Renderer, x: number, color: string, glyph: string, bob: number): void {
+    const context = renderer.context
+    renderer.fillRect(x - 16, ROOM_CENTER_Y + 10, 32, 9, shade(COLOR.bgStone, 0.05))
+    renderer.additive(() => renderer.glowCircle(x, ROOM_CENTER_Y - 4 + bob, PEDESTAL_RADIUS + 3, color, 18))
+    renderer.fillCircle(x, ROOM_CENTER_Y - 4 + bob, PEDESTAL_RADIUS, color)
+    renderer.strokeCircle(x, ROOM_CENTER_Y - 4 + bob, PEDESTAL_RADIUS, COLOR.ink, 2)
+    context.fillStyle = COLOR.ink
+    context.font = `700 15px ${FONT_UI}`
+    context.textAlign = "center"
+    context.textBaseline = "middle"
+    context.fillText(glyph, x, ROOM_CENTER_Y - 3 + bob)
+    context.textAlign = "left"
   }
 
   private renderShop(renderer: Renderer): void {
     const stock = this.currentRoom.shopStock
     if (!stock) return
     const context = renderer.context
+    const bob = Math.sin(this.grainPhase * 0.06) * 2
     for (const entry of stock) {
       if (entry.taken) continue
-      const color =
-        entry.kind === "item" && entry.itemId
-          ? itemById(entry.itemId)?.color ?? "#c0c0c0"
-          : entry.kind === "heart"
-            ? "#d8434a"
-            : "#2c2c30"
-      renderer.fillRect(entry.slotX - 16, ROOM_CENTER_Y + 8, 32, 10, "#2a2320")
-      renderer.fillCircle(entry.slotX, ROOM_CENTER_Y - 4, PEDESTAL_RADIUS, color)
-      context.lineWidth = 2
-      context.strokeStyle = "#1c1512"
-      context.stroke()
-      const glyph =
-        entry.kind === "item" && entry.itemId ? itemById(entry.itemId)?.glyph ?? "?" : entry.kind === "heart" ? "+" : "B"
-      context.fillStyle = "#1c1512"
-      context.font = "bold 15px monospace"
+      const item = entry.kind === "item" && entry.itemId ? itemById(entry.itemId) : undefined
+      const color = item ? itemColor(item) : entry.kind === "heart" ? COLOR.playerGlow : COLOR.bio
+      const glyph = item ? item.glyph : entry.kind === "heart" ? "+" : "B"
+      this.renderChip(renderer, entry.slotX, color, glyph, bob)
+      context.fillStyle = COLOR.playerGlow
+      context.font = `700 13px ${FONT_UI}`
       context.textAlign = "center"
       context.textBaseline = "middle"
-      context.fillText(glyph, entry.slotX, ROOM_CENTER_Y - 3)
-      // Price tag.
-      context.fillStyle = "#e7c14a"
-      context.font = "bold 13px monospace"
-      context.fillText(`${entry.price}`, entry.slotX, ROOM_CENTER_Y + 30)
+      context.fillText(`${entry.price}`, entry.slotX, ROOM_CENTER_Y + 32)
       context.textAlign = "left"
     }
-  }
-
-  private renderFloorLabel(renderer: Renderer): void {
-    const context = renderer.context
-    context.font = "13px monospace"
-    context.textBaseline = "bottom"
-    context.textAlign = "left"
-    context.fillStyle = "#8c8079"
-    context.fillText(`Ebene ${this.level}`, 14, VIEW_HEIGHT - 12)
   }
 
   private renderPedestal(renderer: Renderer): void {
@@ -1017,29 +1155,29 @@ export class Run implements RunApi {
     if (room.pedestalTaken || !room.pedestalItemId) return
     const item = itemById(room.pedestalItemId)
     if (!item) return
-    const context = renderer.context
+    const bob = Math.sin(this.grainPhase * 0.06) * 2.5
+    this.renderChip(renderer, ROOM_CENTER_X, itemColor(item), item.glyph, bob)
+  }
 
-    // Base.
-    renderer.fillRect(ROOM_CENTER_X - 16, ROOM_CENTER_Y + 8, 32, 10, "#2a2320")
-    // Floating item chip.
-    renderer.fillCircle(ROOM_CENTER_X, ROOM_CENTER_Y - 4, PEDESTAL_RADIUS, item.color)
-    context.lineWidth = 2
-    context.strokeStyle = "#1c1512"
-    context.stroke()
-    context.fillStyle = "#1c1512"
-    context.font = "bold 16px monospace"
-    context.textAlign = "center"
-    context.textBaseline = "middle"
-    context.fillText(item.glyph, ROOM_CENTER_X, ROOM_CENTER_Y - 3)
+  private renderFloorLabel(renderer: Renderer): void {
+    const context = renderer.context
+    context.font = `400 12px ${FONT_UI}`
+    context.textBaseline = "bottom"
     context.textAlign = "left"
+    context.fillStyle = shade(COLOR.bgMist, 0.3)
+    context.fillText(`EBENE ${this.level}`, 16, VIEW_HEIGHT - 14)
   }
 
   private renderTrapdoor(renderer: Renderer): void {
     const context = renderer.context
-    renderer.fillCircle(ROOM_CENTER_X, ROOM_CENTER_Y, TRAPDOOR_RADIUS + 4, "#0a0807")
-    renderer.fillCircle(ROOM_CENTER_X, ROOM_CENTER_Y, TRAPDOOR_RADIUS, "#151b24")
-    context.strokeStyle = "#3a4658"
-    context.lineWidth = 3
+    const pulse = 0.5 + Math.sin(this.grainPhase * 0.08) * 0.5
+    renderer.additive(() =>
+      renderer.glowCircle(ROOM_CENTER_X, ROOM_CENTER_Y, TRAPDOOR_RADIUS + 6, COLOR.bio, 12 + pulse * 12),
+    )
+    renderer.fillCircle(ROOM_CENTER_X, ROOM_CENTER_Y, TRAPDOOR_RADIUS + 4, COLOR.ink)
+    renderer.fillCircle(ROOM_CENTER_X, ROOM_CENTER_Y, TRAPDOOR_RADIUS, shade(COLOR.bgDeep, 0.1))
+    context.strokeStyle = COLOR.bio
+    context.lineWidth = 2
     context.beginPath()
     context.arc(ROOM_CENTER_X, ROOM_CENTER_Y, TRAPDOOR_RADIUS, 0, Math.PI * 2)
     context.stroke()
@@ -1047,17 +1185,20 @@ export class Run implements RunApi {
 
   private renderPickupToast(renderer: Renderer): void {
     const context = renderer.context
+    const alpha = Math.min(1, this.pickupToastTicks / 30)
+    context.globalAlpha = alpha
     context.textAlign = "center"
     context.textBaseline = "middle"
-    context.fillStyle = "#f0e6cf"
-    context.font = "bold 18px monospace"
-    context.fillText(this.pickupToastText, ROOM_CENTER_X, ROOM_BOTTOM - 26)
+    context.fillStyle = COLOR.playerCore
+    context.font = `700 18px ${FONT_UI}`
+    context.fillText(this.pickupToastText.toUpperCase(), ROOM_CENTER_X, ROOM_BOTTOM - 30)
+    context.globalAlpha = 1
     context.textAlign = "left"
   }
 
   private renderTransitionFade(renderer: Renderer): void {
-    const alpha = (this.transitionTicks / TRANSITION_TICKS) * 0.8
-    renderer.context.fillStyle = `rgba(8, 6, 5, ${alpha})`
+    const alpha = (this.transitionTicks / TRANSITION_TICKS) * 0.85
+    renderer.context.fillStyle = rgba(COLOR.bgAbyss, alpha)
     renderer.context.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT)
   }
 }

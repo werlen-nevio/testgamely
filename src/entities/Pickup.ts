@@ -1,6 +1,7 @@
 import type { Renderer } from "../core/Renderer"
 import type { Player } from "./Player"
 import { lerp } from "../core/math"
+import { COLOR, shade } from "../theme"
 import { createTransform, rememberPreviousPosition, type Transform } from "./components"
 
 // ─── GROUND PICKUPS ───
@@ -48,40 +49,43 @@ export const updatePickup = (pickup: Pickup, player: Player, deltaSeconds: numbe
   pickup.transform.y += pickup.transform.velocityY * deltaSeconds
 }
 
+// Hearts read as warm life (the player family); coins/bombs/keys are cool bio
+// resources. All pulse and glow so they invite. Colours are tokens only.
 export const renderPickup = (renderer: Renderer, pickup: Pickup, interpolation: number): void => {
   const x = lerp(pickup.transform.previousX, pickup.transform.x, interpolation)
-  const bob = Math.sin(pickup.bobTicks * 0.12) * 2
+  const bob = Math.sin(pickup.bobTicks * 0.12) * 2.5
   const y = lerp(pickup.transform.previousY, pickup.transform.y, interpolation) + bob
-  const context = renderer.context
+  const pulse = 0.5 + Math.sin(pickup.bobTicks * 0.14) * 0.5
+  const isHeart = pickup.type === "heart"
+  const glow = isHeart ? COLOR.playerGlow : COLOR.bio
+
+  renderer.additive(() => renderer.glowCircle(x, y, 8 + pulse * 3, glow, 12 + pulse * 6))
 
   switch (pickup.type) {
     case "heart":
       drawHeart(renderer, x, y)
       break
     case "coin":
-      renderer.fillCircle(x, y, 8, "#e7c14a")
-      context.strokeStyle = "#8a6f1f"
-      context.lineWidth = 2
-      context.stroke()
+      renderer.fillCircle(x, y, 7, COLOR.bio)
+      renderer.fillCircle(x, y, 3, COLOR.flash)
       break
     case "bomb":
-      renderer.fillCircle(x, y, 9, "#2c2c30")
-      context.strokeStyle = "#0f0f12"
-      context.lineWidth = 2
-      context.stroke()
-      renderer.fillRect(x - 1, y - 13, 2, 5, "#c8843a")
+      renderer.fillCircle(x, y, 9, shade(COLOR.bgStone, 0.1))
+      renderer.strokeCircle(x, y, 9, COLOR.bio, 1.5)
+      renderer.fillCircle(x, y - 12, 2.5, COLOR.bio)
       break
     case "key":
-      renderer.fillCircle(x - 3, y - 3, 5, "#d8c65a")
-      renderer.fillRect(x - 1, y - 1, 3, 10, "#d8c65a")
+      renderer.strokeCircle(x - 3, y - 3, 4.5, COLOR.bio, 2.5)
+      renderer.fillRect(x, y, 3, 9, COLOR.bio)
+      renderer.fillRect(x + 3, y + 4, 3, 2, COLOR.bio)
       break
   }
 }
 
 const drawHeart = (renderer: Renderer, x: number, y: number): void => {
   const context = renderer.context
-  context.fillStyle = "#d8434a"
-  context.strokeStyle = "#7a1f24"
+  context.fillStyle = COLOR.playerCore
+  context.strokeStyle = shade(COLOR.playerGlow, -0.2)
   context.lineWidth = 2
   context.beginPath()
   context.arc(x - 4, y - 2, 4, Math.PI, 0)

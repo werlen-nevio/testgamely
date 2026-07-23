@@ -15,7 +15,6 @@ export const ITEMS: Item[] = [
     name: "Rostiger Fang",
     description: "+2 Schaden.",
     tag: "damage",
-    color: "#d1603a",
     glyph: "F",
     modifyStats: (stats) => {
       stats.damage += 2
@@ -26,7 +25,6 @@ export const ITEMS: Item[] = [
     name: "Zuckabzug",
     description: "Deutlich höhere Feuerrate.",
     tag: "tears",
-    color: "#4fb0c9",
     glyph: "T",
     modifyStats: (stats) => {
       stats.fireRate += 1.6
@@ -37,7 +35,6 @@ export const ITEMS: Item[] = [
     name: "Fernglas",
     description: "+Reichweite und Schussgeschwindigkeit.",
     tag: "utility",
-    color: "#6fa1c9",
     glyph: "L",
     modifyStats: (stats) => {
       stats.range += 160
@@ -49,7 +46,6 @@ export const ITEMS: Item[] = [
     name: "Flinke Stiefel",
     description: "+Bewegungstempo.",
     tag: "utility",
-    color: "#63c98a",
     glyph: "B",
     modifyStats: (stats) => {
       stats.moveSpeed += 45
@@ -60,7 +56,6 @@ export const ITEMS: Item[] = [
     name: "Schwarzes Kleeblatt",
     description: "+Glück.",
     tag: "utility",
-    color: "#4a8f5a",
     glyph: "C",
     modifyStats: (stats) => {
       stats.luck += 3
@@ -71,7 +66,6 @@ export const ITEMS: Item[] = [
     name: "Schweres Geschoss",
     description: "+3.5 Schaden, aber langsamere Feuerrate.",
     tag: "damage",
-    color: "#b8503a",
     glyph: "S",
     modifyStats: (stats) => {
       stats.damage += 3.5
@@ -83,7 +77,6 @@ export const ITEMS: Item[] = [
     name: "Eiserne Rinde",
     description: "+1 maximales Herz, voll geheilt.",
     tag: "defense",
-    color: "#c98a4a",
     glyph: "R",
     modifyStats: (stats) => {
       stats.maxHearts += 1
@@ -97,7 +90,6 @@ export const ITEMS: Item[] = [
     name: "Opferklinge",
     description: "+5 Schaden, aber -1 maximales Herz.",
     tag: "damage",
-    color: "#a8324a",
     glyph: "X",
     modifyStats: (stats) => {
       stats.damage += 5
@@ -109,7 +101,6 @@ export const ITEMS: Item[] = [
     name: "Schwungkern",
     description: "+Tempo und +Schussgeschwindigkeit.",
     tag: "utility",
-    color: "#5ac9c0",
     glyph: "M",
     modifyStats: (stats) => {
       stats.moveSpeed += 28
@@ -121,7 +112,6 @@ export const ITEMS: Item[] = [
     name: "Zwillingsfänge",
     description: "+1.5 Schaden und +0.8 Feuerrate.",
     tag: "damage",
-    color: "#d17a4a",
     glyph: "W",
     modifyStats: (stats) => {
       stats.damage += 1.5
@@ -135,7 +125,6 @@ export const ITEMS: Item[] = [
     name: "Geisterschuss",
     description: "Schüsse durchbohren alle Gegner.",
     tag: "shot",
-    color: "#c9c2e8",
     glyph: "P",
     onShoot: ({ projectile }) => {
       projectile.flags.piercing = true
@@ -147,7 +136,6 @@ export const ITEMS: Item[] = [
     name: "Magnetherz",
     description: "Schüsse suchen sich Gegner.",
     tag: "shot",
-    color: "#8a7ad6",
     glyph: "H",
     onShoot: ({ projectile }) => {
       projectile.flags.homing = true
@@ -158,7 +146,6 @@ export const ITEMS: Item[] = [
     name: "Spaltzunge",
     description: "Feuert zwei zusätzliche Schüsse im Fächer.",
     tag: "shot",
-    color: "#d7a54a",
     glyph: "Y",
     onShoot: ({ run, projectile }) => {
       const { velocityX, velocityY } = projectile.transform
@@ -183,7 +170,6 @@ export const ITEMS: Item[] = [
     name: "Gummigeschoss",
     description: "Schüsse prallen von Wänden ab.",
     tag: "shot",
-    color: "#5ac97a",
     glyph: "O",
     onShoot: ({ projectile }) => {
       projectile.flags.bouncing = true
@@ -195,7 +181,6 @@ export const ITEMS: Item[] = [
     name: "Pulverspitze",
     description: "Schüsse explodieren beim Aufprall.",
     tag: "shot",
-    color: "#e08a3a",
     glyph: "E",
     onShoot: ({ projectile }) => {
       projectile.flags.explosive = true
@@ -206,7 +191,6 @@ export const ITEMS: Item[] = [
     name: "Giftbeutel",
     description: "Schüsse vergiften Gegner.",
     tag: "shot",
-    color: "#7ac94a",
     glyph: "V",
     onShoot: ({ projectile }) => {
       projectile.flags.poison = true
@@ -217,7 +201,6 @@ export const ITEMS: Item[] = [
     name: "Geschwollenes Auge",
     description: "Grössere, härtere Schüsse.",
     tag: "shot",
-    color: "#c95a8a",
     glyph: "G",
     onShoot: ({ projectile }) => {
       projectile.radius *= 1.7
@@ -229,7 +212,6 @@ export const ITEMS: Item[] = [
     name: "Spiegelzwilling",
     description: "Feuert einen parallelen zweiten Schuss.",
     tag: "shot",
-    color: "#9ac9d6",
     glyph: "II",
     onShoot: ({ run, projectile }) => {
       const perpX = -projectile.transform.velocityY
@@ -253,7 +235,6 @@ export const ITEMS: Item[] = [
     name: "Rückendeckung",
     description: "Feuert zusätzlich nach hinten.",
     tag: "shot",
-    color: "#c9b04a",
     glyph: "R",
     onShoot: ({ run, projectile }) => {
       run.spawnShot({
@@ -275,7 +256,6 @@ export const ITEMS: Item[] = [
     name: "Glutmal",
     description: "Treffer entzünden Gift bei Gegnern.",
     tag: "shot",
-    color: "#d15a3a",
     glyph: "K",
     onHit: ({ enemy }) => {
       applyPoison(enemy, 70)
@@ -286,7 +266,6 @@ export const ITEMS: Item[] = [
     name: "Egel-Amulett",
     description: "Kills heilen manchmal.",
     tag: "defense",
-    color: "#b83a5a",
     glyph: "D",
     onKill: ({ run, player }) => {
       if (Math.random() < 0.12) run.heal(1)
@@ -298,7 +277,6 @@ export const ITEMS: Item[] = [
     name: "Münzader",
     description: "Kills lassen manchmal Münzen fallen.",
     tag: "utility",
-    color: "#d6b23a",
     glyph: "$",
     onKill: ({ run, x, y }) => {
       if (Math.random() < 0.2) run.spawnPickupDrop(x, y)
@@ -309,7 +287,6 @@ export const ITEMS: Item[] = [
     name: "Opferschale",
     description: "Geräumte Räume bringen Münzen.",
     tag: "utility",
-    color: "#c9a24a",
     glyph: "U",
     onRoomClear: ({ run }) => {
       run.addCoins(2)
@@ -320,11 +297,10 @@ export const ITEMS: Item[] = [
     name: "Dornenmantel",
     description: "Schaden zu nehmen verletzt alle Gegner.",
     tag: "defense",
-    color: "#8a9a3a",
     glyph: "Z",
     onDamageTaken: ({ run }) => {
       run.damageAllEnemies(4)
-      run.shake(8)
+      run.shake(0.3)
     },
   },
   {
@@ -332,7 +308,6 @@ export const ITEMS: Item[] = [
     name: "Bollwerkherz",
     description: "+2 maximale Herzen, voll geheilt, etwas langsamer.",
     tag: "defense",
-    color: "#b87a3a",
     glyph: "A",
     modifyStats: (stats) => {
       stats.maxHearts += 2

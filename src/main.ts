@@ -1,3 +1,7 @@
+import "@fontsource/cinzel/500.css"
+import "@fontsource/cinzel/700.css"
+import "@fontsource/space-mono/400.css"
+import "@fontsource/space-mono/700.css"
 import "./style.css"
 import { Renderer } from "./core/Renderer"
 import { Input } from "./core/Input"

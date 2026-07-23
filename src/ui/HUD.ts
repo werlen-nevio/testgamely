@@ -1,14 +1,13 @@
 import type { Renderer } from "../core/Renderer"
 import type { Player } from "../entities/Player"
+import { itemColor } from "../items/Item"
+import { COLOR, shade } from "../theme"
+import { FONT_UI } from "./fonts"
 
 // ─── HUD ───
-// Top-left status overlay: the heart row, a coin counter, and a row of item
-// icons so the player can read their build at a glance.
-
-const HEART_FULL_COLOR = "#d8434a"
-const HEART_FULL_EDGE = "#7a1f24"
-const HEART_EMPTY_COLOR = "#3a2a2b"
-const HEART_EMPTY_EDGE = "#251b1c"
+// Top-left status: warm hearts (life belongs to the player's warm family), the
+// coin/bomb/key counters, and a glowing row of held-item chips. Colours are
+// tokens only; the deliberate UI font carries the mood.
 
 const HEART_SIZE = 22
 const HEART_GAP = 6
@@ -31,38 +30,42 @@ const renderHearts = (renderer: Renderer, player: Player): void => {
   for (let index = 0; index < maxHearts; index += 1) {
     const filled = index < hearts
     const x = MARGIN + index * (HEART_SIZE + HEART_GAP)
+    if (filled) {
+      renderer.additive(() =>
+        renderer.glowCircle(x + HEART_SIZE / 2, MARGIN + HEART_SIZE / 2, 8, COLOR.playerGlow, 10),
+      )
+    }
     drawHeart(
       renderer,
       x,
       MARGIN,
       HEART_SIZE,
-      filled ? HEART_FULL_COLOR : HEART_EMPTY_COLOR,
-      filled ? HEART_FULL_EDGE : HEART_EMPTY_EDGE,
+      filled ? COLOR.playerCore : shade(COLOR.bgStone, 0.05),
+      filled ? shade(COLOR.playerGlow, -0.2) : shade(COLOR.bgStone, -0.2),
     )
   }
 }
 
 const renderCounters = (renderer: Renderer, counts: HudCounts): void => {
   const context = renderer.context
-  const y = MARGIN + HEART_SIZE + 10
-  context.font = "bold 14px monospace"
+  const y = MARGIN + HEART_SIZE + 12
+  context.font = `700 14px ${FONT_UI}`
   context.textBaseline = "middle"
   context.textAlign = "left"
 
-  // Coin.
-  renderer.fillCircle(MARGIN + 7, y + 8, 7, "#e7c14a")
-  context.fillStyle = "#e7e0cf"
-  context.fillText(String(counts.coins), MARGIN + 18, y + 9)
+  renderer.fillCircle(MARGIN + 7, y + 8, 7, COLOR.bio)
+  renderer.fillCircle(MARGIN + 7, y + 8, 3, COLOR.flash)
+  context.fillStyle = shade(COLOR.bio, 0.5)
+  context.fillText(String(counts.coins), MARGIN + 20, y + 9)
 
-  // Bomb.
-  renderer.fillCircle(MARGIN + 62, y + 8, 7, "#2c2c30")
-  context.fillStyle = "#e7e0cf"
-  context.fillText(String(counts.bombs), MARGIN + 74, y + 9)
+  renderer.fillCircle(MARGIN + 64, y + 8, 7, shade(COLOR.bgStone, 0.1))
+  renderer.strokeCircle(MARGIN + 64, y + 8, 7, COLOR.bio, 1.5)
+  context.fillStyle = shade(COLOR.bio, 0.5)
+  context.fillText(String(counts.bombs), MARGIN + 78, y + 9)
 
-  // Key.
-  renderer.fillCircle(MARGIN + 116, y + 6, 4, "#d8c65a")
-  renderer.fillRect(MARGIN + 115, y + 7, 2, 8, "#d8c65a")
-  context.fillStyle = "#e7e0cf"
+  renderer.strokeCircle(MARGIN + 116, y + 6, 4, COLOR.bio, 2)
+  renderer.fillRect(MARGIN + 118, y + 7, 2, 8, COLOR.bio)
+  context.fillStyle = shade(COLOR.bio, 0.5)
   context.fillText(String(counts.keys), MARGIN + 128, y + 9)
 }
 
@@ -72,16 +75,17 @@ const ITEM_ICON_GAP = 5
 const renderItemRow = (renderer: Renderer, player: Player): void => {
   if (player.items.length === 0) return
   const context = renderer.context
-  const y = MARGIN + HEART_SIZE + 30
+  const y = MARGIN + HEART_SIZE + 34
   for (let index = 0; index < player.items.length; index += 1) {
     const item = player.items[index]
+    const color = itemColor(item)
     const x = MARGIN + index * (ITEM_ICON_SIZE + ITEM_ICON_GAP)
-    renderer.fillRect(x, y, ITEM_ICON_SIZE, ITEM_ICON_SIZE, item.color)
-    context.strokeStyle = "#1c1512"
+    renderer.fillRect(x, y, ITEM_ICON_SIZE, ITEM_ICON_SIZE, color)
+    context.strokeStyle = COLOR.ink
     context.lineWidth = 2
     context.strokeRect(x, y, ITEM_ICON_SIZE, ITEM_ICON_SIZE)
-    context.fillStyle = "#1c1512"
-    context.font = "bold 13px monospace"
+    context.fillStyle = COLOR.ink
+    context.font = `700 12px ${FONT_UI}`
     context.textAlign = "center"
     context.textBaseline = "middle"
     context.fillText(item.glyph, x + ITEM_ICON_SIZE / 2, y + ITEM_ICON_SIZE / 2 + 1)

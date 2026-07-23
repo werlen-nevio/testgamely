@@ -1,6 +1,7 @@
 import type { Player, PlayerStats } from "../entities/Player"
 import type { Projectile, ProjectileSpawn } from "../entities/Projectile"
 import type { Enemy } from "../entities/Enemy"
+import { COLOR } from "../theme"
 
 // ─── ITEM SYSTEM ───
 // An item is data with optional lifecycle hooks — never a special case in the
@@ -58,12 +59,23 @@ export interface DamageContext extends ItemContext {
 
 export type ItemTag = "damage" | "tears" | "shot" | "utility" | "defense"
 
+// Item colour is derived from its tag so every icon stays on-palette and the
+// hue itself reads as a category (all shot-modifiers share one colour, etc.).
+const TAG_COLOR: Record<ItemTag, string> = {
+  damage: COLOR.brood,
+  tears: COLOR.caster,
+  shot: COLOR.bio,
+  utility: COLOR.leaper,
+  defense: COLOR.hunter,
+}
+
+export const itemColor = (item: Item): string => TAG_COLOR[item.tag]
+
 export interface Item {
   id: string
   name: string
   description: string
   tag: ItemTag
-  color: string
   glyph: string // single character shown on the HUD icon
   modifyStats?: (stats: PlayerStats) => void
   onPickup?: (context: ItemContext) => void

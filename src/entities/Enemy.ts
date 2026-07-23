@@ -1,6 +1,7 @@
 import type { Renderer } from "../core/Renderer"
 import type { Player } from "./Player"
 import { approach, clamp, lerp, normalize } from "../core/math"
+import { COLOR, shade, rgba } from "../theme"
 import { ROOM_LEFT, ROOM_TOP, ROOM_RIGHT, ROOM_BOTTOM } from "../constants"
 import {
   createTransform,
@@ -335,23 +336,21 @@ export const canSplit = (enemy: Enemy): boolean =>
   enemy.type === "splitter" && enemy.generation < SPLITTER_SIZES.length - 1
 
 // ─── RENDER ───
+// Cold, glowing creatures — never as bright as the player, never the danger
+// hue (only their shots are). Each silhouette carries the type; colour carries
+// the family. Colours come from theme tokens only.
 
-const FLASH_COLOR = "#ffffff"
-
-interface EnemyStyle {
-  fill: string
-  edge: string
+const ENEMY_TOKEN: Record<EnemyType, string> = {
+  chaser: COLOR.hunter,
+  hopper: COLOR.leaper,
+  shooter: COLOR.caster,
+  bouncer: COLOR.shard,
+  splitter: COLOR.brood,
 }
 
-const ENEMY_STYLE: Record<EnemyType, EnemyStyle> = {
-  chaser: { fill: "#a8322f", edge: "#5c1b19" },
-  hopper: { fill: "#5aa845", edge: "#2f5c22" },
-  shooter: { fill: "#8a53c9", edge: "#4a2b6f" },
-  bouncer: { fill: "#37b0a0", edge: "#1c6058" },
-  splitter: { fill: "#d08a3a", edge: "#6f4519" },
-}
+export const enemyColor = (enemy: Enemy): string => ENEMY_TOKEN[enemy.type]
 
-const EYE_COLOR = "#f4e2c4"
+const EYE = COLOR.ink
 
 export const renderEnemy = (renderer: Renderer, enemy: Enemy, interpolation: number): void => {
   const { transform, body } = enemy
@@ -359,50 +358,62 @@ export const renderEnemy = (renderer: Renderer, enemy: Enemy, interpolation: num
   const y = lerp(transform.previousY, transform.y, interpolation)
   const context = renderer.context
   const flashing = enemy.hitFlashTicks > 0
-  const style = ENEMY_STYLE[enemy.type]
-  const fill = flashing ? FLASH_COLOR : style.fill
-  const edge = flashing ? FLASH_COLOR : style.edge
+  const base = ENEMY_TOKEN[enemy.type]
+  const fill = flashing ? COLOR.flash : base
+  const edge = flashing ? COLOR.flash : shade(base, -0.45)
+
+  // Cold self-glow — subtle so it never competes with the player.
+  renderer.additive(() => renderer.glowCircle(x, y, body.radius + 1, base, 10))
+  // A poisoned creature seeps green.
+  if (enemy.poisonTicks > 0) {
+    renderer.additive(() => renderer.glowCircle(x, y, body.radius + 2, COLOR.leaper, 12))
+  }
 
   if (enemy.type === "bouncer") {
-    // A rotated square reads as the rigid, grid-locked mover.
+    // A slowly-spinning crystal shard: a built guardian, not a creature.
     const radius = body.radius
+    const spin = enemy.timerTicks * 0.05 + Math.atan2(transform.velocityY, transform.velocityX) * 0.2
     context.save()
     context.translate(x, y)
-    context.rotate(Math.PI / 4)
+    context.rotate(Math.PI / 4 + spin)
     renderer.fillRect(-radius, -radius, radius * 2, radius * 2, fill)
-    context.lineWidth = 2
     context.strokeStyle = edge
+    context.lineWidth = 2
     context.strokeRect(-radius, -radius, radius * 2, radius * 2)
+    if (!flashing) {
+      renderer.fillRect(-radius * 0.45, -radius * 0.45, radius * 0.9, radius * 0.9, shade(base, 0.35))
+    }
     context.restore()
     return
   }
 
-  // Hoppers squash while resting and stretch along their leap.
+  // Hoppers squash while resting and stretch along their leap (the attack tell).
   let radiusX = body.radius
   let radiusY = body.radius
   if (enemy.type === "hopper") {
-    if (enemy.mode === 1) {
-      radiusX = body.radius * 0.82
-      radiusY = body.radius * 1.2
-    } else {
-      radiusX = body.radius * 1.12
-      radiusY = body.radius * 0.86
-    }
+    radiusX = enemy.mode === 1 ? body.radius * 0.82 : body.radius * 1.12
+    radiusY = enemy.mode === 1 ? body.radius * 1.2 : body.radius * 0.86
   }
 
   context.fillStyle = fill
   context.beginPath()
   context.ellipse(x, y, radiusX, radiusY, 0, 0, Math.PI * 2)
   context.fill()
-  context.lineWidth = 2
   context.strokeStyle = edge
+  context.lineWidth = 2
   context.stroke()
 
   if (flashing) return
 
+  // Shooter tell: a focus ring that tightens as it winds up to fire.
+  if (enemy.type === "shooter") {
+    const windup = Math.max(0, Math.min(1, enemy.timerTicks / 82))
+    renderer.strokeCircle(x, y, body.radius + 3 + windup * 8, rgba(base, 0.6), 2)
+  }
+
+  // Splitter seam.
   if (enemy.type === "splitter" && enemy.generation < SPLITTER_SIZES.length - 1) {
-    // Dividing seam hints that it will split.
-    context.strokeStyle = style.edge
+    context.strokeStyle = shade(base, -0.4)
     context.lineWidth = 2
     context.beginPath()
     context.moveTo(x, y - radiusY)
@@ -410,8 +421,14 @@ export const renderEnemy = (renderer: Renderer, enemy: Enemy, interpolation: num
     context.stroke()
   }
 
-  const eyeOffsetX = body.radius * 0.4
-  const eyeOffsetY = body.radius * 0.12
-  renderer.fillCircle(x - eyeOffsetX, y - eyeOffsetY, 3, EYE_COLOR)
-  renderer.fillCircle(x + eyeOffsetX, y - eyeOffsetY, 3, EYE_COLOR)
+  // Eyes — one big for the chaser (a single stare), two otherwise.
+  if (enemy.type === "chaser") {
+    renderer.fillCircle(x, y - body.radius * 0.1, 4, EYE)
+    renderer.fillCircle(x + 1.5, y - body.radius * 0.1 - 1, 1.6, COLOR.flash)
+  } else {
+    const eyeOffsetX = body.radius * 0.4
+    const eyeOffsetY = body.radius * 0.12
+    renderer.fillCircle(x - eyeOffsetX, y - eyeOffsetY, 2.6, EYE)
+    renderer.fillCircle(x + eyeOffsetX, y - eyeOffsetY, 2.6, EYE)
+  }
 }

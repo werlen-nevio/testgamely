@@ -1,5 +1,6 @@
 import type { Renderer } from "../core/Renderer"
 import { lerp } from "../core/math"
+import { COLOR, rgba } from "../theme"
 import { ROOM_LEFT, ROOM_TOP, ROOM_RIGHT, ROOM_BOTTOM } from "../constants"
 import { createTransform, rememberPreviousPosition, type Transform } from "./components"
 
@@ -78,10 +79,6 @@ const createInactiveProjectile = (): Projectile => ({
   hitEpoch: 0,
 })
 
-const PLAYER_CORE_COLOR = "#ffe6a3"
-const PLAYER_EDGE_COLOR = "#e79a3c"
-const ENEMY_CORE_COLOR = "#c9d4ff"
-const ENEMY_EDGE_COLOR = "#6f7ad6"
 
 export class ProjectilePool {
   readonly items: Projectile[]
@@ -174,14 +171,53 @@ export class ProjectilePool {
   }
 
   render(renderer: Renderer, interpolation: number): void {
+    const context = renderer.context
+    renderer.additive(() => {
+      for (const projectile of this.items) {
+        if (!projectile.active) continue
+        const { transform, radius } = projectile
+        const x = lerp(transform.previousX, transform.x, interpolation)
+        const y = lerp(transform.previousY, transform.y, interpolation)
+        const isPlayer = projectile.faction === "player"
+        const glow = isPlayer ? COLOR.bio : COLOR.danger
+
+        // Motion streak — a short tail along the reverse of travel.
+        const speed = Math.hypot(transform.velocityX, transform.velocityY) || 1
+        const tailX = x - (transform.velocityX / speed) * radius * 2.6
+        const tailY = y - (transform.velocityY / speed) * radius * 2.6
+        context.strokeStyle = rgba(glow, 0.35)
+        context.lineWidth = radius * 1.1
+        context.lineCap = "round"
+        context.beginPath()
+        context.moveTo(tailX, tailY)
+        context.lineTo(x, y)
+        context.stroke()
+
+        context.shadowColor = glow
+        context.shadowBlur = 12
+        if (isPlayer) {
+          // Round bio bolt.
+          renderer.fillCircle(x, y, radius, glow)
+        } else {
+          // Sharp danger diamond.
+          context.save()
+          context.translate(x, y)
+          context.rotate(Math.PI / 4)
+          context.fillStyle = glow
+          context.fillRect(-radius, -radius, radius * 2, radius * 2)
+          context.restore()
+        }
+        context.shadowBlur = 0
+      }
+    })
+
+    // Bright inner cores, drawn crisp on top.
     for (const projectile of this.items) {
       if (!projectile.active) continue
       const { transform, radius } = projectile
       const x = lerp(transform.previousX, transform.x, interpolation)
       const y = lerp(transform.previousY, transform.y, interpolation)
-      const isPlayer = projectile.faction === "player"
-      renderer.fillCircle(x, y, radius + 1, isPlayer ? PLAYER_EDGE_COLOR : ENEMY_EDGE_COLOR)
-      renderer.fillCircle(x, y, radius - 1, isPlayer ? PLAYER_CORE_COLOR : ENEMY_CORE_COLOR)
+      renderer.fillCircle(x, y, radius * 0.5, COLOR.flash)
     }
   }
 }

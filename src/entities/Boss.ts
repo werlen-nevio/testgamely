@@ -2,6 +2,7 @@ import type { Renderer } from "../core/Renderer"
 import type { Player } from "./Player"
 import type { EnemyContext } from "./Enemy"
 import { clamp, lerp } from "../core/math"
+import { COLOR, shade, rgba } from "../theme"
 import {
   ROOM_LEFT,
   ROOM_TOP,
@@ -168,33 +169,65 @@ const fireSpiral = (boss: Boss, context: EnemyContext): void => {
 }
 
 // ─── RENDER ───
-
-const PHASE1_FILL = "#7a2f6d"
-const PHASE2_FILL = "#a83030"
-const BOSS_EDGE = "#2a1020"
-const FLASH_COLOR = "#ffffff"
-const CORE_COLOR = "#f4e2c4"
+// Bigger and louder than anything else. Phase 2 is legible at a glance: the body
+// colour shifts from royal violet toward the danger hue and grows an extra ring
+// of spines that pulse faster.
 
 export const renderBoss = (renderer: Renderer, boss: Boss, interpolation: number): void => {
   const x = lerp(boss.transform.previousX, boss.transform.x, interpolation)
   const y = lerp(boss.transform.previousY, boss.transform.y, interpolation)
   const context = renderer.context
   const flashing = boss.hitFlashTicks > 0
-  const fill = flashing ? FLASH_COLOR : boss.phase === 2 ? PHASE2_FILL : PHASE1_FILL
+  const radius = boss.body.radius
+  const base = boss.phase === 2 ? COLOR.bossHot : COLOR.bossBody
+  const fill = flashing ? COLOR.flash : base
+  const pulseSpeed = boss.phase === 2 ? 0.16 : 0.09
+  const pulse = 0.5 + Math.sin(boss.spinAngle * 2 + boss.attackTimer * pulseSpeed) * 0.5
 
-  renderer.fillCircle(x, y, boss.body.radius, fill)
-  context.lineWidth = 3
-  context.strokeStyle = flashing ? FLASH_COLOR : BOSS_EDGE
-  context.stroke()
+  // Heavy self-glow.
+  renderer.additive(() => renderer.glowCircle(x, y, radius + 4, base, 22 + pulse * 10))
+
+  // Rotating spine ring — an extra, hotter ring appears in phase 2.
+  drawSpines(context, x, y, radius + 8, boss.phase === 2 ? 12 : 8, boss.spinAngle, rgba(base, 0.5))
+  if (boss.phase === 2) {
+    drawSpines(context, x, y, radius + 16, 12, -boss.spinAngle * 1.4, rgba(COLOR.danger, 0.55))
+  }
+
+  renderer.fillCircle(x, y, radius, fill)
+  renderer.strokeCircle(x, y, radius, shade(base, -0.4), 3)
 
   if (!flashing) {
-    renderer.fillCircle(x - 11, y - 6, 5, CORE_COLOR)
-    renderer.fillCircle(x + 11, y - 6, 5, CORE_COLOR)
-    renderer.fillCircle(x - 11, y - 6, 2, "#2a1020")
-    renderer.fillCircle(x + 11, y - 6, 2, "#2a1020")
+    // Two glowing eyes.
+    renderer.fillCircle(x - 12, y - 6, 6, COLOR.flash)
+    renderer.fillCircle(x + 12, y - 6, 6, COLOR.flash)
+    renderer.fillCircle(x - 12, y - 6, 2.5, COLOR.ink)
+    renderer.fillCircle(x + 12, y - 6, 2.5, COLOR.ink)
   }
 
   renderBossHealthBar(renderer, boss)
+}
+
+const drawSpines = (
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  radius: number,
+  count: number,
+  angle: number,
+  color: string,
+): void => {
+  context.strokeStyle = color
+  context.lineWidth = 3
+  context.lineCap = "round"
+  for (let index = 0; index < count; index += 1) {
+    const spineAngle = angle + (index / count) * Math.PI * 2
+    const cos = Math.cos(spineAngle)
+    const sin = Math.sin(spineAngle)
+    context.beginPath()
+    context.moveTo(x + cos * radius, y + sin * radius)
+    context.lineTo(x + cos * (radius + 8), y + sin * (radius + 8))
+    context.stroke()
+  }
 }
 
 const renderBossHealthBar = (renderer: Renderer, boss: Boss): void => {
@@ -202,7 +235,9 @@ const renderBossHealthBar = (renderer: Renderer, boss: Boss): void => {
   const x = ROOM_LEFT + 60
   const y = ROOM_BOTTOM - 22
   const fraction = Math.max(0, boss.health / boss.maxHealth)
-  renderer.fillRect(x - 2, y - 2, width + 4, 14, "#1a1210")
-  renderer.fillRect(x, y, width, 10, "#3a2a2a")
-  renderer.fillRect(x, y, width * fraction, 10, boss.phase === 2 ? "#d84a4a" : "#c25aa8")
+  renderer.fillRect(x - 2, y - 2, width + 4, 14, COLOR.ink)
+  renderer.fillRect(x, y, width, 10, shade(COLOR.bgStone, 0.05))
+  const fillColor = boss.phase === 2 ? COLOR.danger : COLOR.bossBody
+  renderer.fillRect(x, y, width * fraction, 10, fillColor)
+  renderer.additive(() => renderer.fillRect(x, y, width * fraction, 3, shade(fillColor, 0.4)))
 }

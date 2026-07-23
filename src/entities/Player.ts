@@ -1,6 +1,7 @@
 import type { Renderer } from "../core/Renderer"
 import type { Input } from "../core/Input"
 import { approach, clamp, lerp } from "../core/math"
+import { COLOR, shade, rgba } from "../theme"
 import {
   ROOM_LEFT,
   ROOM_TOP,
@@ -47,6 +48,8 @@ export interface Player {
   invulnerableTicks: number
   // Ticks until the weapon may fire again; derived from the fireRate stat.
   shootCooldownTicks: number
+  // Free-running clock for idle breathing / glow pulse.
+  animTicks: number
 }
 
 // ─── MOVEMENT FEEL ───
@@ -79,6 +82,7 @@ export const createPlayer = (x: number, y: number): Player => {
     facingY: 1,
     invulnerableTicks: 0,
     shootCooldownTicks: 0,
+    animTicks: 0,
   }
 }
 
@@ -137,14 +141,14 @@ export const updatePlayer = (
   }
 
   // ─── TIMERS ───
+  player.animTicks += 1
   if (player.invulnerableTicks > 0) player.invulnerableTicks -= 1
   if (player.shootCooldownTicks > 0) player.shootCooldownTicks -= 1
 }
 
-const BODY_COLOR = "#e9ddc0"
-const OUTLINE_COLOR = "#241d1a"
-const EYE_COLOR = "#7a4a2c"
-
+// The player is a lantern-bearer: the single warm, brightest silhouette, its
+// own light source. A soft breathing pulse, a directional lantern cone, and a
+// warm bloom set it apart from everything cold in the world.
 export const renderPlayer = (
   renderer: Renderer,
   player: Player,
@@ -160,12 +164,31 @@ export const renderPlayer = (
   const y = lerp(transform.previousY, transform.y, interpolation)
   const context = renderer.context
 
-  renderer.fillCircle(x, y, body.radius, BODY_COLOR)
-  context.lineWidth = 2
-  context.strokeStyle = OUTLINE_COLOR
-  context.stroke()
+  const breathe = Math.sin(player.animTicks * 0.09)
+  const radius = body.radius + breathe * 0.8
+  const facingX = player.facingX
+  const facingY = player.facingY
 
-  // A small "eye" nub marks facing, giving the blob a clear silhouette.
-  const nubDistance = body.radius - 4
-  renderer.fillCircle(x + player.facingX * nubDistance, y + player.facingY * nubDistance, 5, EYE_COLOR)
+  // Lantern cone — a soft warm wedge pointing where the player aims.
+  const facingAngle = Math.atan2(facingY, facingX)
+  renderer.additive(() => {
+    const gradient = context.createRadialGradient(x, y, radius, x, y, 92)
+    gradient.addColorStop(0, rgba(COLOR.playerGlow, 0.32))
+    gradient.addColorStop(1, rgba(COLOR.playerGlow, 0))
+    context.fillStyle = gradient
+    context.beginPath()
+    context.moveTo(x, y)
+    context.arc(x, y, 92, facingAngle - 0.5, facingAngle + 0.5)
+    context.closePath()
+    context.fill()
+  })
+
+  // Warm bloom + core.
+  renderer.additive(() => renderer.glowCircle(x, y, radius + 3, COLOR.playerGlow, 18 + breathe * 4))
+  renderer.fillCircle(x, y, radius, COLOR.playerCore)
+  renderer.strokeCircle(x, y, radius, shade(COLOR.playerGlow, -0.35), 2)
+
+  // Inner eye toward the aim — a tiny warm-dark pupil for a clear front.
+  const nubDistance = radius - 5
+  renderer.fillCircle(x + facingX * nubDistance, y + facingY * nubDistance, 4, shade(COLOR.playerGlow, -0.2))
 }
