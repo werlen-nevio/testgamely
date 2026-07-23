@@ -46,6 +46,7 @@ export interface Enemy {
   generation: number // splitter: 0 big, 1 medium, 2 small (no more splitting)
   poisonTicks: number // remaining poison duration
   poisonTimer: number // ticks until the next poison tick of damage
+  chillTicks: number // remaining slow from chill shots
   // Facing (sentinel front shield, charger dash line).
   facingX: number
   facingY: number
@@ -94,6 +95,7 @@ const baseEnemy = (type: EnemyType, x: number, y: number, radius: number, health
   generation: 0,
   poisonTicks: 0,
   poisonTimer: 0,
+  chillTicks: 0,
   facingX: 0,
   facingY: 1,
   targetX: 0,
@@ -108,6 +110,11 @@ const POISON_DAMAGE = 1
 // Refreshes an enemy's poison duration (used by poison shots / on-hit items).
 export const applyPoison = (enemy: Enemy, ticks: number): void => {
   enemy.poisonTicks = Math.max(enemy.poisonTicks, ticks)
+}
+
+// Slows an enemy for a while (chill shots).
+export const applyChill = (enemy: Enemy, ticks: number): void => {
+  enemy.chillTicks = Math.max(enemy.chillTicks, ticks)
 }
 
 // Advances poison one tick. Returns true (and flashes) when a tick of poison
@@ -267,6 +274,7 @@ export const updateEnemy = (
 ): void => {
   rememberPreviousPosition(enemy.transform)
   if (enemy.hitFlashTicks > 0) enemy.hitFlashTicks -= 1
+  if (enemy.chillTicks > 0) enemy.chillTicks -= 1
 
   // The bouncer owns its whole movement (reflection, not clamping).
   if (enemy.type === "bouncer") {
@@ -308,8 +316,9 @@ export const updateEnemy = (
   }
 
   const { transform, body } = enemy
-  transform.x += transform.velocityX * deltaSeconds
-  transform.y += transform.velocityY * deltaSeconds
+  const chillScale = enemy.chillTicks > 0 ? 0.5 : 1
+  transform.x += transform.velocityX * deltaSeconds * chillScale
+  transform.y += transform.velocityY * deltaSeconds * chillScale
   transform.x = clamp(transform.x, ROOM_LEFT + body.radius, ROOM_RIGHT - body.radius)
   transform.y = clamp(transform.y, ROOM_TOP + body.radius, ROOM_BOTTOM - body.radius)
 }

@@ -3,6 +3,7 @@ import type { Player } from "../entities/Player"
 import { itemColor } from "../items/Item"
 import { COLOR, shade } from "../theme"
 import { FONT_UI } from "./fonts"
+import { VIEW_HEIGHT } from "../constants"
 
 // ─── HUD ───
 // Top-left status: warm hearts (life belongs to the player's warm family), the
@@ -17,19 +18,57 @@ export interface HudCounts {
   coins: number
   bombs: number
   keys: number
+  shield: boolean
 }
 
 export const renderHud = (renderer: Renderer, player: Player, counts: HudCounts): void => {
-  renderHearts(renderer, player)
+  renderHearts(renderer, player, counts.shield)
   renderCounters(renderer, counts)
   renderItemRow(renderer, player)
+  renderActiveItem(renderer, player)
 }
 
-const renderHearts = (renderer: Renderer, player: Player): void => {
+// Bottom-left: the active-item chip with a charge arc that fills as it readies.
+const renderActiveItem = (renderer: Renderer, player: Player): void => {
+  const item = player.activeItem
+  if (!item) return
+  const context = renderer.context
+  const x = MARGIN + 22
+  const y = VIEW_HEIGHT - 34
+  const ready = player.activeCharge >= 1
+  const color = ready ? COLOR.playerCore : shade(COLOR.playerGlow, -0.15)
+
+  if (ready) renderer.additive(() => renderer.glowCircle(x, y, 20, COLOR.playerGlow, 14))
+  renderer.fillCircle(x, y, 18, shade(COLOR.bgStone, 0.05))
+  renderer.strokeCircle(x, y, 18, shade(COLOR.playerGlow, -0.3), 2)
+
+  // Charge arc.
+  context.strokeStyle = color
+  context.lineWidth = 3
+  context.beginPath()
+  context.arc(x, y, 18, -Math.PI / 2, -Math.PI / 2 + Math.min(1, player.activeCharge) * Math.PI * 2)
+  context.stroke()
+
+  context.fillStyle = ready ? COLOR.playerCore : shade(COLOR.playerGlow, 0.1)
+  context.font = `700 15px ${FONT_UI}`
+  context.textAlign = "center"
+  context.textBaseline = "middle"
+  context.fillText(item.glyph, x, y + 1)
+  context.fillStyle = shade(COLOR.bgMist, 0.3)
+  context.font = `400 11px ${FONT_UI}`
+  context.textAlign = "left"
+  context.fillText("[LEER]", x + 26, y + 1)
+}
+
+const renderHearts = (renderer: Renderer, player: Player, shield: boolean): void => {
   const { hearts, maxHearts } = player.stats
   for (let index = 0; index < maxHearts; index += 1) {
     const filled = index < hearts
     const x = MARGIN + index * (HEART_SIZE + HEART_GAP)
+    if (shield && index === 0) {
+      // A bio shield bubble hugs the heart row when a shield is up.
+      renderer.strokeCircle(x + HEART_SIZE / 2, MARGIN + HEART_SIZE / 2, HEART_SIZE * 0.9, COLOR.bio, 2)
+    }
     if (filled) {
       renderer.additive(() =>
         renderer.glowCircle(x + HEART_SIZE / 2, MARGIN + HEART_SIZE / 2, 8, COLOR.playerGlow, 10),

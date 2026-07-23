@@ -17,6 +17,11 @@ export interface ProjectileFlags {
   explosive: boolean
   bouncing: boolean
   poison: boolean
+  chain: boolean // arcs to a nearby enemy on hit
+  boomerang: boolean // curves back toward the player
+  chill: boolean // slows the enemy on hit
+  wave: boolean // weaves sideways in flight
+  fork: boolean // bursts into fragments on a killing hit
 }
 
 export interface Projectile {
@@ -26,10 +31,12 @@ export interface Projectile {
   radius: number
   damage: number
   lifeTicks: number
+  ageTicks: number // ticks alive, for wave motion
   flags: ProjectileFlags
   // Remaining pass-throughs / wall reflections; seeded from the flags on spawn.
   pierceRemaining: number
   bounceRemaining: number
+  chainRemaining: number
   // Marks enemies already hit so a piercing shot never double-hits one enemy.
   hitEpoch: number
 }
@@ -51,19 +58,32 @@ const resetFlags = (flags: ProjectileFlags): void => {
   flags.explosive = false
   flags.bouncing = false
   flags.poison = false
+  flags.chain = false
+  flags.boomerang = false
+  flags.chill = false
+  flags.wave = false
+  flags.fork = false
 }
 
 // Copies one projectile's shot modifiers onto another. Used so extra shots
 // spawned mid-onShoot (spread, etc.) end up with the same final flags as the
 // primary, regardless of the order items ran in.
 export const copyShotModifiers = (source: Projectile, target: Projectile): void => {
-  target.flags.homing = source.flags.homing
-  target.flags.piercing = source.flags.piercing
-  target.flags.explosive = source.flags.explosive
-  target.flags.bouncing = source.flags.bouncing
-  target.flags.poison = source.flags.poison
+  const to = target.flags
+  const from = source.flags
+  to.homing = from.homing
+  to.piercing = from.piercing
+  to.explosive = from.explosive
+  to.bouncing = from.bouncing
+  to.poison = from.poison
+  to.chain = from.chain
+  to.boomerang = from.boomerang
+  to.chill = from.chill
+  to.wave = from.wave
+  to.fork = from.fork
   target.pierceRemaining = source.pierceRemaining
   target.bounceRemaining = source.bounceRemaining
+  target.chainRemaining = source.chainRemaining
 }
 
 const createInactiveProjectile = (): Projectile => ({
@@ -73,9 +93,22 @@ const createInactiveProjectile = (): Projectile => ({
   radius: 6,
   damage: 0,
   lifeTicks: 0,
-  flags: { homing: false, piercing: false, explosive: false, bouncing: false, poison: false },
+  ageTicks: 0,
+  flags: {
+    homing: false,
+    piercing: false,
+    explosive: false,
+    bouncing: false,
+    poison: false,
+    chain: false,
+    boomerang: false,
+    chill: false,
+    wave: false,
+    fork: false,
+  },
   pierceRemaining: 0,
   bounceRemaining: 0,
+  chainRemaining: 0,
   hitEpoch: 0,
 })
 
@@ -105,9 +138,11 @@ export class ProjectilePool {
     projectile.radius = spawn.radius
     projectile.damage = spawn.damage
     projectile.lifeTicks = spawn.lifeTicks
+    projectile.ageTicks = 0
     resetFlags(projectile.flags)
     projectile.pierceRemaining = 0
     projectile.bounceRemaining = 0
+    projectile.chainRemaining = 0
     projectile.hitEpoch = this.epoch
     return projectile
   }
@@ -128,9 +163,20 @@ export class ProjectilePool {
       if (!projectile.active) continue
       const { transform } = projectile
       rememberPreviousPosition(transform)
+      projectile.ageTicks += 1
 
       transform.x += transform.velocityX * deltaSeconds
       transform.y += transform.velocityY * deltaSeconds
+
+      // Wave shots weave sideways: a perpendicular sine offset on top of travel.
+      if (projectile.flags.wave) {
+        const speed = Math.hypot(transform.velocityX, transform.velocityY) || 1
+        const perpX = -transform.velocityY / speed
+        const perpY = transform.velocityX / speed
+        const sway = Math.cos(projectile.ageTicks * 0.35) * 3.4
+        transform.x += perpX * sway
+        transform.y += perpY * sway
+      }
 
       projectile.lifeTicks -= 1
       if (projectile.lifeTicks <= 0) {

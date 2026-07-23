@@ -28,6 +28,13 @@ export interface RunApi {
   spawnPickupDrop(x: number, y: number): void
   damageAllEnemies(amount: number): void
   shake(strength: number): void
+  // Active-item verbs.
+  nova(damage: number): void
+  pullEnemies(strength: number): void
+  blink(distance: number): void
+  grantShield(): void
+  slowTime(ticks: number): void
+  clearEnemyShots(): void
 }
 
 export interface ItemContext {
@@ -57,7 +64,10 @@ export interface DamageContext extends ItemContext {
   amount: number
 }
 
-export type ItemTag = "damage" | "tears" | "shot" | "utility" | "defense"
+export type ItemTag = "damage" | "tears" | "shot" | "utility" | "defense" | "active"
+
+export type Rarity = "common" | "rare" | "legendary"
+export type ItemPool = "treasure" | "shop" | "boss"
 
 // Item colour is derived from its tag so every icon stays on-palette and the
 // hue itself reads as a category (all shot-modifiers share one colour, etc.).
@@ -67,16 +77,26 @@ const TAG_COLOR: Record<ItemTag, string> = {
   shot: COLOR.bio,
   utility: COLOR.leaper,
   defense: COLOR.hunter,
+  active: COLOR.playerGlow,
 }
 
 export const itemColor = (item: Item): string => TAG_COLOR[item.tag]
+
+export interface ActiveConfig {
+  // Charge earned per room cleared; and/or a passive per-second trickle.
+  chargeRooms?: number
+  chargeSeconds?: number
+}
 
 export interface Item {
   id: string
   name: string
   description: string
   tag: ItemTag
+  rarity: Rarity
+  pools: ItemPool[]
   glyph: string // single character shown on the HUD icon
+  active?: ActiveConfig
   modifyStats?: (stats: PlayerStats) => void
   onPickup?: (context: ItemContext) => void
   onShoot?: (context: ShootContext) => void
@@ -84,4 +104,5 @@ export interface Item {
   onKill?: (context: KillContext) => void
   onRoomClear?: (context: ItemContext) => void
   onDamageTaken?: (context: DamageContext) => void
+  onActivate?: (context: ItemContext) => void
 }

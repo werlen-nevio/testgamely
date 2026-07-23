@@ -41,6 +41,9 @@ export interface Player {
   baseStats: PlayerStats
   stats: PlayerStats
   items: Item[]
+  // One active-item slot plus its charge (0..1, ready at 1).
+  activeItem: Item | null
+  activeCharge: number
   // Unit vector describing where the player last aimed or moved — used for the
   // facing indicator now, and shot direction fallback later.
   facingX: number
@@ -78,6 +81,8 @@ export const createPlayer = (x: number, y: number): Player => {
     baseStats,
     stats: { ...baseStats },
     items: [],
+    activeItem: null,
+    activeCharge: 0,
     facingX: 0,
     facingY: 1,
     invulnerableTicks: 0,

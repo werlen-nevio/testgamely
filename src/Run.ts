@@ -2,7 +2,7 @@ import type { Renderer } from "./core/Renderer"
 import type { Input } from "./core/Input"
 import { SpatialGrid } from "./core/SpatialGrid"
 import { circlesOverlap } from "./core/collision"
-import { approach, lerp } from "./core/math"
+import { approach, lerp, clamp } from "./core/math"
 import { Camera } from "./core/Camera"
 import { TRAUMA, HITSTOP, HURT, CAMERA, HIT_KNOCKBACK } from "./feel"
 import { COLOR, shade, rgba } from "./theme"
@@ -40,6 +40,7 @@ import {
   canSplit,
   tickPoison,
   applyPoison,
+  applyChill,
   enemyColor,
   isChargerExposed,
   SENTINEL_SHIELD_ARC,
@@ -161,6 +162,7 @@ export class Run implements RunApi {
   private slowmoPhase = 0
   private hurtPulseTicks = 0
   private grainPhase = 0
+  private shieldCharges = 0
   private trapdoorArmTicks = 0
   private pickupToastText = ""
   private pickupToastTicks = 0
@@ -209,6 +211,7 @@ export class Run implements RunApi {
     resolveCircleAgainstObstacles(this.player.transform, this.player.body.radius, this.currentRoom.obstacles)
     this.handleShooting(input)
     if (input.wasJustPressed("KeyE")) this.placeBomb()
+    this.handleActiveItem(input, deltaSeconds)
 
     // Footstep dust when moving with some pace.
     const speed = Math.hypot(this.player.transform.velocityX, this.player.transform.velocityY)
@@ -239,6 +242,7 @@ export class Run implements RunApi {
     if (this.boss) updateBoss(this.boss, this.player, this.enemyContext, deltaSeconds)
 
     this.steerHomingShots()
+    this.steerBoomerangShots()
     this.projectiles.update(deltaSeconds)
     this.particles.update(deltaSeconds)
     this.updateBombs()
@@ -258,6 +262,7 @@ export class Run implements RunApi {
       this.runRoomClearHooks()
       this.dropRoomClearReward()
       this.celebrateRoomClear()
+      this.chargeActiveOnRoomClear()
     }
 
     this.handleItemPedestal()
@@ -343,6 +348,77 @@ export class Run implements RunApi {
     this.camera.addTrauma(amount)
   }
 
+  // Charges the active item over time (if it trickles) and fires it on Space.
+  private handleActiveItem(input: Input, deltaSeconds: number): void {
+    const player = this.player
+    const item = player.activeItem
+    if (!item || !item.active) return
+    if (item.active.chargeSeconds && player.activeCharge < 1) {
+      player.activeCharge = Math.min(1, player.activeCharge + deltaSeconds / item.active.chargeSeconds)
+    }
+    if (input.wasJustPressed("Space") && player.activeCharge >= 1) {
+      item.onActivate?.({ run: this, player })
+      player.activeCharge = 0
+    }
+  }
+
+  // Room-based active items gain a fraction of a charge per cleared room.
+  private chargeActiveOnRoomClear(): void {
+    const item = this.player.activeItem
+    if (!item || !item.active || !item.active.chargeRooms) return
+    this.player.activeCharge = Math.min(1, this.player.activeCharge + 1 / item.active.chargeRooms)
+  }
+
+  // ─── ACTIVE-ITEM VERBS ───
+
+  nova(damage: number): void {
+    this.particles.shockwave(this.player.transform.x, this.player.transform.y, 260, COLOR.playerGlow)
+    this.camera.addTrauma(TRAUMA.explosion)
+    this.damageAllEnemies(damage)
+    this.clearEnemyShots()
+  }
+
+  pullEnemies(strength: number): void {
+    for (const enemy of this.enemies) {
+      if (!enemy.active) continue
+      const dx = this.player.transform.x - enemy.transform.x
+      const dy = this.player.transform.y - enemy.transform.y
+      const distance = Math.hypot(dx, dy) || 1
+      enemy.transform.velocityX += (dx / distance) * strength
+      enemy.transform.velocityY += (dy / distance) * strength
+    }
+  }
+
+  blink(distance: number): void {
+    const transform = this.player.transform
+    transform.x = clamp(transform.x + this.player.facingX * distance, ROOM_LEFT + this.player.body.radius, ROOM_RIGHT - this.player.body.radius)
+    transform.y = clamp(transform.y + this.player.facingY * distance, ROOM_TOP + this.player.body.radius, ROOM_BOTTOM - this.player.body.radius)
+    transform.previousX = transform.x
+    transform.previousY = transform.y
+    this.player.invulnerableTicks = Math.max(this.player.invulnerableTicks, 24)
+    this.particles.burst(transform.x, transform.y, 10, COLOR.bio, 140, 18)
+  }
+
+  grantShield(): void {
+    this.shieldCharges = 1
+  }
+
+  slowTime(ticks: number): void {
+    for (const enemy of this.enemies) if (enemy.active) applyChill(enemy, ticks)
+    for (const projectile of this.projectiles.items) {
+      if (projectile.active && projectile.faction === "enemy") {
+        projectile.transform.velocityX *= 0.4
+        projectile.transform.velocityY *= 0.4
+      }
+    }
+  }
+
+  clearEnemyShots(): void {
+    for (const projectile of this.projectiles.items) {
+      if (projectile.active && projectile.faction === "enemy") projectile.active = false
+    }
+  }
+
   // ─── SHOOTING & ITEM HOOKS ───
 
   private handleShooting(input: Input): void {
@@ -406,6 +482,55 @@ export class Run implements RunApi {
       steeredY = (steeredY / steeredSpeed) * speed
       projectile.transform.velocityX = steeredX
       projectile.transform.velocityY = steeredY
+    }
+  }
+
+  // Boomerang shots curve back toward the player — they accelerate homeward, so
+  // they slow, stop, and return (hitting twice with piercing).
+  private steerBoomerangShots(): void {
+    const player = this.player
+    for (const projectile of this.projectiles.items) {
+      if (!projectile.active || projectile.faction !== "player" || !projectile.flags.boomerang) continue
+      const deltaX = player.transform.x - projectile.transform.x
+      const deltaY = player.transform.y - projectile.transform.y
+      const distance = Math.hypot(deltaX, deltaY) || 1
+      projectile.transform.velocityX += (deltaX / distance) * 26
+      projectile.transform.velocityY += (deltaY / distance) * 26
+    }
+  }
+
+  // Chain lightning: arc a diminished hit to the nearest *other* enemy.
+  private chainTo(fromEnemy: Enemy, damage: number): void {
+    let best: Enemy | null = null
+    let bestDistance = 160 * 160
+    for (const enemy of this.enemies) {
+      if (!enemy.active || enemy === fromEnemy || enemy.shielded || enemy.intangible) continue
+      const distanceSquared =
+        (enemy.transform.x - fromEnemy.transform.x) ** 2 + (enemy.transform.y - fromEnemy.transform.y) ** 2
+      if (distanceSquared < bestDistance) {
+        bestDistance = distanceSquared
+        best = enemy
+      }
+    }
+    if (!best) return
+    this.particles.burst(best.transform.x, best.transform.y, 4, COLOR.bio, 90, 10)
+    if (damageEnemy(best, damage)) this.killEnemy(best)
+  }
+
+  // Fork burst: a killing fork shot sprays fragments outward.
+  private spawnForkFragments(x: number, y: number, damage: number): void {
+    for (let index = 0; index < 4; index += 1) {
+      const angle = (index / 4) * Math.PI * 2 + 0.4
+      this.projectiles.spawn({
+        faction: "player",
+        x,
+        y,
+        velocityX: Math.cos(angle) * 280,
+        velocityY: Math.sin(angle) * 280,
+        radius: 4,
+        damage,
+        lifeTicks: 24,
+      })
     }
   }
 
@@ -479,6 +604,11 @@ export class Run implements RunApi {
         const damage = isChargerExposed(enemy) ? projectile.damage * 1.5 : projectile.damage
         const died = damageEnemy(enemy, damage)
         if (projectile.flags.poison) applyPoison(enemy, 90)
+        if (projectile.flags.chill) applyChill(enemy, 100)
+        if (projectile.flags.chain && projectile.chainRemaining > 0) {
+          this.chainTo(enemy, projectile.damage * 0.6)
+          projectile.chainRemaining -= 1
+        }
         this.knockback(enemy, projectile.transform.velocityX, projectile.transform.velocityY)
         this.particles.impact(
           projectile.transform.x,
@@ -489,7 +619,10 @@ export class Run implements RunApi {
         )
         this.camera.addTrauma(TRAUMA.enemyHit)
         this.runHitHooks(projectile, enemy)
-        if (died) this.killEnemy(enemy)
+        if (died) {
+          if (projectile.flags.fork) this.spawnForkFragments(enemy.transform.x, enemy.transform.y, projectile.damage * 0.5)
+          this.killEnemy(enemy)
+        }
 
         if (projectile.flags.explosive) {
           this.explodeAt(projectile.transform.x, projectile.transform.y, projectile.damage * 2 + 8, 62)
@@ -637,6 +770,15 @@ export class Run implements RunApi {
 
   private hurtPlayer(amount: number): void {
     const player = this.player
+    if (player.invulnerableTicks > 0) return
+    // A shield absorbs the hit entirely (no damage, brief i-frames + flash).
+    if (this.shieldCharges > 0) {
+      this.shieldCharges -= 1
+      player.invulnerableTicks = 30
+      this.particles.burst(player.transform.x, player.transform.y, 12, COLOR.bio, 150, 20)
+      this.camera.addTrauma(0.2)
+      return
+    }
     const wasInvulnerable = player.invulnerableTicks > 0
     damagePlayer(player, amount)
     if (wasInvulnerable) return
@@ -961,9 +1103,15 @@ export class Run implements RunApi {
 
   // ─── ITEMS ───
 
+  // Pedestals sit centre in item rooms; in boss rooms the reward sits above the
+  // trapdoor so the two don't overlap.
+  private pedestalY(): number {
+    return this.currentRoom.kind === "boss" ? ROOM_CENTER_Y - 84 : ROOM_CENTER_Y
+  }
+
   private handleItemPedestal(): void {
     const room = this.currentRoom
-    if (room.kind !== "item" || !room.pedestalItemId || room.pedestalTaken) return
+    if (!room.pedestalItemId || room.pedestalTaken) return
     const player = this.player
     if (
       circlesOverlap(
@@ -971,7 +1119,7 @@ export class Run implements RunApi {
         player.transform.y,
         player.body.radius,
         ROOM_CENTER_X,
-        ROOM_CENTER_Y,
+        this.pedestalY(),
         PEDESTAL_RADIUS,
       )
     ) {
@@ -982,9 +1130,15 @@ export class Run implements RunApi {
   }
 
   private grantItem(item: Item): void {
-    this.player.items.push(item)
+    if (item.tag === "active") {
+      // Active items live in a single slot, not the passive stack.
+      this.player.activeItem = item
+      this.player.activeCharge = 0
+    } else {
+      this.player.items.push(item)
+      recomputePlayerStats(this.player)
+    }
     item.onPickup?.({ run: this, player: this.player })
-    recomputePlayerStats(this.player)
     this.pickupToastText = item.name
     this.pickupToastTicks = PICKUP_TOAST_TICKS
   }
@@ -1046,7 +1200,7 @@ export class Run implements RunApi {
           this.enemies.push(createEnemy(spawn.type, tileCenterX(spawn.col), tileCenterY(spawn.row)))
         }
       } else if (node.kind === "item") {
-        node.pedestalItemId = randomItemId(this.player.items.map((item) => item.id))
+        node.pedestalItemId = randomItemId("treasure", this.heldItemIds(), this.player.stats.luck)
       } else if (node.kind === "boss") {
         this.boss = createBoss(this.level)
       } else if (node.kind === "shop") {
@@ -1062,10 +1216,12 @@ export class Run implements RunApi {
   }
 
   private buildShopStock(): ShopEntry[] {
-    const heldIds = this.player.items.map((item) => item.id)
+    const held = this.heldItemIds()
+    const luck = this.player.stats.luck
+    const first = randomItemId("shop", held, luck)
     return [
-      { kind: "item", itemId: randomItemId(heldIds), price: 15, taken: false, slotX: ROOM_CENTER_X - SHOP_SLOT_OFFSET },
-      { kind: "item", itemId: randomItemId(heldIds), price: 15, taken: false, slotX: ROOM_CENTER_X },
+      { kind: "item", itemId: first, price: 15, taken: false, slotX: ROOM_CENTER_X - SHOP_SLOT_OFFSET },
+      { kind: "item", itemId: randomItemId("shop", [...held, first], luck), price: 15, taken: false, slotX: ROOM_CENTER_X },
       { kind: "heart", itemId: null, price: 5, taken: false, slotX: ROOM_CENTER_X + SHOP_SLOT_OFFSET },
     ]
   }
@@ -1099,7 +1255,17 @@ export class Run implements RunApi {
       this.particles.burst(boss.transform.x, boss.transform.y, 40, COLOR.bossHot, 300, 34)
       this.particles.shockwave(boss.transform.x, boss.transform.y, 120, COLOR.bossHot)
     }
+    // Boss reward: an item from the boss pool, offered on a pedestal.
+    this.currentRoom.pedestalItemId = randomItemId("boss", this.heldItemIds(), this.player.stats.luck)
+    this.currentRoom.pedestalTaken = false
     this.runRoomClearHooks()
+    this.chargeActiveOnRoomClear()
+  }
+
+  private heldItemIds(): string[] {
+    const ids = this.player.items.map((item) => item.id)
+    if (this.player.activeItem) ids.push(this.player.activeItem.id)
+    return ids
   }
 
   private handleTrapdoor(): void {
@@ -1167,7 +1333,7 @@ export class Run implements RunApi {
 
     renderRoom(renderer, this.currentRoom, this.floor)
     this.renderHazards(renderer)
-    if (this.currentRoom.kind === "item") this.renderPedestal(renderer)
+    if (this.currentRoom.pedestalItemId && !this.currentRoom.pedestalTaken) this.renderPedestal(renderer)
     if (this.currentRoom.kind === "shop") this.renderShop(renderer)
     if (this.currentRoom.kind === "boss" && this.currentRoom.cleared) this.renderTrapdoor(renderer)
     for (const pickup of this.pickups) {
@@ -1193,7 +1359,12 @@ export class Run implements RunApi {
     this.grain.render(renderer, (this.grainPhase % 5) * 7, ((this.grainPhase * 3) % 5) * 7)
     this.grainPhase += 1
 
-    renderHud(renderer, this.player, { coins: this.coins, bombs: this.bombs, keys: this.keys })
+    renderHud(renderer, this.player, {
+      coins: this.coins,
+      bombs: this.bombs,
+      keys: this.keys,
+      shield: this.shieldCharges > 0,
+    })
     renderMinimap(renderer, this.floor, this.currentRoom.index)
     this.renderFloorLabel(renderer)
     if (this.pickupToastTicks > 0) this.renderPickupToast(renderer)
@@ -1249,18 +1420,18 @@ export class Run implements RunApi {
     }
   }
 
-  // A glowing pedestal chip — item rooms and shops share the look.
-  private renderChip(renderer: Renderer, x: number, color: string, glyph: string, bob: number): void {
+  // A glowing pedestal chip — item rooms, shops and boss rewards share the look.
+  private renderChip(renderer: Renderer, x: number, centerY: number, color: string, glyph: string, bob: number): void {
     const context = renderer.context
-    renderer.fillRect(x - 16, ROOM_CENTER_Y + 10, 32, 9, shade(COLOR.bgStone, 0.05))
-    renderer.additive(() => renderer.glowCircle(x, ROOM_CENTER_Y - 4 + bob, PEDESTAL_RADIUS + 3, color, 18))
-    renderer.fillCircle(x, ROOM_CENTER_Y - 4 + bob, PEDESTAL_RADIUS, color)
-    renderer.strokeCircle(x, ROOM_CENTER_Y - 4 + bob, PEDESTAL_RADIUS, COLOR.ink, 2)
+    renderer.fillRect(x - 16, centerY + 10, 32, 9, shade(COLOR.bgStone, 0.05))
+    renderer.additive(() => renderer.glowCircle(x, centerY - 4 + bob, PEDESTAL_RADIUS + 3, color, 18))
+    renderer.fillCircle(x, centerY - 4 + bob, PEDESTAL_RADIUS, color)
+    renderer.strokeCircle(x, centerY - 4 + bob, PEDESTAL_RADIUS, COLOR.ink, 2)
     context.fillStyle = COLOR.ink
     context.font = `700 15px ${FONT_UI}`
     context.textAlign = "center"
     context.textBaseline = "middle"
-    context.fillText(glyph, x, ROOM_CENTER_Y - 3 + bob)
+    context.fillText(glyph, x, centerY - 3 + bob)
     context.textAlign = "left"
   }
 
@@ -1274,7 +1445,7 @@ export class Run implements RunApi {
       const item = entry.kind === "item" && entry.itemId ? itemById(entry.itemId) : undefined
       const color = item ? itemColor(item) : entry.kind === "heart" ? COLOR.playerGlow : COLOR.bio
       const glyph = item ? item.glyph : entry.kind === "heart" ? "+" : "B"
-      this.renderChip(renderer, entry.slotX, color, glyph, bob)
+      this.renderChip(renderer, entry.slotX, ROOM_CENTER_Y, color, glyph, bob)
       context.fillStyle = COLOR.playerGlow
       context.font = `700 13px ${FONT_UI}`
       context.textAlign = "center"
@@ -1290,7 +1461,7 @@ export class Run implements RunApi {
     const item = itemById(room.pedestalItemId)
     if (!item) return
     const bob = Math.sin(this.grainPhase * 0.06) * 2.5
-    this.renderChip(renderer, ROOM_CENTER_X, itemColor(item), item.glyph, bob)
+    this.renderChip(renderer, ROOM_CENTER_X, this.pedestalY(), itemColor(item), item.glyph, bob)
   }
 
   private renderFloorLabel(renderer: Renderer): void {

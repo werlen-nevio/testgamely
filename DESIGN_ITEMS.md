@@ -126,6 +126,14 @@ Mindestens ein Drittel bildet mit ≥2 anderen eine spürbare Synergie. Kern-Clu
 - **Glaskanone:** Abgrund-Pakt ↔ Federschuppe ↔ Statik-Schleier ↔ Gleitströmung ↔ Makelloses Gelübde.
 - **Flag-Verstärker:** Prismenkern ↔ jedes Flag-Item; Hohler Chor ↔ jedes onShoot-Item.
 
+## Umsetzungs-Änderungen (dokumentiert)
+- **Prismenkern:** statt „alle Flag-Effekte +50 %" (im Kern diffus umzusetzen) nun
+  „Schüsse gabeln UND vergiften" — klare Flag-Gewährung, macht jeden Build zum
+  Flächen-Build, bleibt ein Build-Definer.
+- **Bumerangflosse/Schwermond** implizieren Durchschuss (treffen so 2× / lohnen die
+  Grösse). **Hohler Chor** = ~⅓-Chance Echo-Schuss (stateless) statt „jeder 3.".
+- Endstand **52 Items** (im Zielband 50–60), davon **20 schuss-getaggt** (≥15).
+
 ## Regeln (aus Prompt 1 fortgeführt)
 - Eigene Namen/Konzepte, nichts aus dem Vorbild.
 - Neue Items = neue Effekt-Objekte in `items/registry.ts`, kein Kern-Sonderfall.
