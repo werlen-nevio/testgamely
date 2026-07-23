@@ -112,6 +112,7 @@ export const updatePlayer = (
   player: Player,
   input: Input,
   deltaSeconds: number,
+  speedScale = 1,
 ): void => {
   const { transform, body, stats } = player
   rememberPreviousPosition(transform)
@@ -120,8 +121,9 @@ export const updatePlayer = (
   const move = input.moveVector()
   const isMoving = move.x !== 0 || move.y !== 0
   const response = isMoving ? ACCELERATION_RESPONSE : STOP_RESPONSE
-  transform.velocityX = approach(transform.velocityX, move.x * stats.moveSpeed, response)
-  transform.velocityY = approach(transform.velocityY, move.y * stats.moveSpeed, response)
+  const maxSpeed = stats.moveSpeed * speedScale
+  transform.velocityX = approach(transform.velocityX, move.x * maxSpeed, response)
+  transform.velocityY = approach(transform.velocityY, move.y * maxSpeed, response)
 
   transform.x += transform.velocityX * deltaSeconds
   transform.y += transform.velocityY * deltaSeconds

@@ -41,6 +41,8 @@ import {
   tickPoison,
   applyPoison,
   enemyColor,
+  isChargerExposed,
+  SENTINEL_SHIELD_ARC,
   type Enemy,
   type EnemyContext,
 } from "./entities/Enemy"
@@ -96,6 +98,21 @@ interface ActiveBomb {
   fuseTicks: number
 }
 
+// Floor hazards spawned by enemies: a lingering "field" (weaver trail) that
+// slows and stings, or a one-shot "burst" (diver slam).
+interface Hazard {
+  kind: "field" | "burst"
+  x: number
+  y: number
+  radius: number
+  ticks: number
+  maxTicks: number
+  damage: number
+  hitPlayer: boolean
+}
+
+const FIELD_SLOW_SCALE = 0.55
+
 export class Run implements RunApi {
   readonly player: Player
   floor: Floor
@@ -116,9 +133,13 @@ export class Run implements RunApi {
   // Reused each tick so enemies can shoot / read obstacles without allocation.
   private readonly enemyContext: EnemyContext = {
     obstacles: [],
+    enemies: [],
     spawnEnemyProjectile: (x, y, velocityX, velocityY, damage) =>
       this.spawnEnemyProjectile(x, y, velocityX, velocityY, damage),
+    spawnField: (x, y, radius, ticks) => this.spawnField(x, y, radius, ticks),
+    spawnBurst: (x, y, radius, damage) => this.spawnBurst(x, y, radius, damage),
   }
+  private readonly hazards: Hazard[] = []
   // Projectiles spawned during the shot currently being fired, so extra shots
   // inherit the primary's final flags.
   private readonly shotBuffer: Projectile[] = []
@@ -172,7 +193,9 @@ export class Run implements RunApi {
       if (this.slowmoPhase !== 0) return
     }
 
-    updatePlayer(this.player, input, deltaSeconds)
+    // Standing in a weaver's hazard field slows the player.
+    const speedScale = this.playerInField() ? FIELD_SLOW_SCALE : 1
+    updatePlayer(this.player, input, deltaSeconds, speedScale)
     resolveCircleAgainstObstacles(this.player.transform, this.player.body.radius, this.currentRoom.obstacles)
     this.handleShooting(input)
     if (input.wasJustPressed("KeyE")) this.placeBomb()
@@ -189,12 +212,16 @@ export class Run implements RunApi {
       )
     }
 
+    // Shields are recomputed every tick; wardens re-apply them below.
+    for (const enemy of this.enemies) enemy.shielded = false
+
     this.enemyContext.obstacles = this.currentRoom.obstacles
+    this.enemyContext.enemies = this.enemies
     for (const enemy of this.enemies) {
       if (!enemy.active) continue
       updateEnemy(enemy, this.player, this.enemyContext, deltaSeconds)
-      // The bouncer resolves its own wall/obstacle reflection; the rest slide.
-      if (enemy.type !== "bouncer") {
+      // The bouncer resolves its own reflection; intangible divers pass through.
+      if (enemy.type !== "bouncer" && !enemy.intangible) {
         resolveCircleAgainstObstacles(enemy.transform, enemy.body.radius, this.currentRoom.obstacles)
       }
       if (tickPoison(enemy)) this.killEnemy(enemy)
@@ -205,6 +232,7 @@ export class Run implements RunApi {
     this.projectiles.update(deltaSeconds)
     this.particles.update(deltaSeconds)
     this.updateBombs()
+    this.updateHazards()
     this.updatePickups(deltaSeconds)
     this.resolveProjectilesHittingObstacles()
     this.resolvePlayerShotsHittingEnemies()
@@ -404,6 +432,8 @@ export class Run implements RunApi {
       for (let resultIndex = 0; resultIndex < found; resultIndex += 1) {
         const enemy = this.enemies[this.grid.result[resultIndex]]
         if (!enemy.active) continue
+        // The diver is intangible mid-dive — shots pass clean through it.
+        if (enemy.intangible) continue
         if (
           !circlesOverlap(
             projectile.transform.x,
@@ -417,7 +447,27 @@ export class Run implements RunApi {
           continue
         }
 
-        const died = damageEnemy(enemy, projectile.damage)
+        // A warden shield or a sentinel's front arc deflects the shot — no
+        // damage. The shot is spent (unless piercing) and sparks off the shield.
+        if (this.shotDeflected(enemy, projectile.transform.x, projectile.transform.y)) {
+          this.particles.impact(
+            projectile.transform.x,
+            projectile.transform.y,
+            projectile.transform.velocityX,
+            projectile.transform.velocityY,
+            COLOR.bio,
+          )
+          if (projectile.pierceRemaining > 0) {
+            projectile.pierceRemaining -= 1
+            continue
+          }
+          projectile.active = false
+          break
+        }
+
+        // Chargers are wide open during their post-dash recovery.
+        const damage = isChargerExposed(enemy) ? projectile.damage * 1.5 : projectile.damage
+        const died = damageEnemy(enemy, damage)
         if (projectile.flags.poison) applyPoison(enemy, 90)
         this.knockback(enemy, projectile.transform.velocityX, projectile.transform.velocityY)
         this.particles.impact(
@@ -444,6 +494,18 @@ export class Run implements RunApi {
         break
       }
     }
+  }
+
+  // True if a shot arriving at (x,y) is blocked: a warden-shielded enemy is
+  // immune everywhere; a sentinel only blocks from within its front arc.
+  private shotDeflected(enemy: Enemy, x: number, y: number): boolean {
+    if (enemy.shielded) return true
+    if (enemy.type !== "sentinel") return false
+    const toShotX = x - enemy.transform.x
+    const toShotY = y - enemy.transform.y
+    const distance = Math.hypot(toShotX, toShotY) || 1
+    const dot = (toShotX / distance) * enemy.facingX + (toShotY / distance) * enemy.facingY
+    return dot >= Math.cos(SENTINEL_SHIELD_ARC)
   }
 
   // Nudges an enemy along a hit direction so a shot visibly connects.
@@ -534,7 +596,7 @@ export class Run implements RunApi {
     }
 
     for (const enemy of this.enemies) {
-      if (!enemy.active) continue
+      if (!enemy.active || enemy.intangible) continue
       if (
         circlesOverlap(
           player.transform.x,
@@ -652,6 +714,57 @@ export class Run implements RunApi {
       this.explodeAt(bomb.x, bomb.y, BOMB_DAMAGE, BOMB_RADIUS)
       this.activeBombs.splice(index, 1)
     }
+  }
+
+  // ─── HAZARDS (enemy fields & slams) ───
+
+  private spawnField(x: number, y: number, radius: number, ticks: number): void {
+    this.hazards.push({ kind: "field", x, y, radius, ticks, maxTicks: ticks, damage: 1, hitPlayer: false })
+  }
+
+  private spawnBurst(x: number, y: number, radius: number, damage: number): void {
+    this.hazards.push({ kind: "burst", x, y, radius, ticks: 14, maxTicks: 14, damage, hitPlayer: false })
+    this.particles.shockwave(x, y, radius, COLOR.danger)
+  }
+
+  private playerInField(): boolean {
+    const player = this.player
+    for (const hazard of this.hazards) {
+      if (hazard.kind !== "field") continue
+      if (circlesOverlap(hazard.x, hazard.y, hazard.radius, player.transform.x, player.transform.y, player.body.radius)) {
+        return true
+      }
+    }
+    return false
+  }
+
+  private updateHazards(): void {
+    const player = this.player
+    let writeIndex = 0
+    for (let readIndex = 0; readIndex < this.hazards.length; readIndex += 1) {
+      const hazard = this.hazards[readIndex]
+      hazard.ticks -= 1
+
+      const touching = circlesOverlap(
+        hazard.x,
+        hazard.y,
+        hazard.radius,
+        player.transform.x,
+        player.transform.y,
+        player.body.radius,
+      )
+      // Fields sting on contact (i-frames pace it); bursts hit once.
+      if (touching && !hazard.hitPlayer && player.invulnerableTicks === 0) {
+        this.hurtPlayer(hazard.damage)
+        if (hazard.kind === "burst") hazard.hitPlayer = true
+      }
+
+      if (hazard.ticks > 0) {
+        this.hazards[writeIndex] = hazard
+        writeIndex += 1
+      }
+    }
+    this.hazards.length = writeIndex
   }
 
   private explodeAt(x: number, y: number, damage: number, radius: number): void {
@@ -920,6 +1033,7 @@ export class Run implements RunApi {
     this.boss = null
     this.pickups = []
     this.activeBombs.length = 0
+    this.hazards.length = 0
     this.trapdoorArmTicks = 0
     this.projectiles.deactivateAll()
 
@@ -1052,6 +1166,7 @@ export class Run implements RunApi {
     this.camera.begin(context)
 
     renderRoom(renderer, this.currentRoom, this.floor)
+    this.renderHazards(renderer)
     if (this.currentRoom.kind === "item") this.renderPedestal(renderer)
     if (this.currentRoom.kind === "shop") this.renderShop(renderer)
     if (this.currentRoom.kind === "boss" && this.currentRoom.cleared) this.renderTrapdoor(renderer)
@@ -1103,6 +1218,25 @@ export class Run implements RunApi {
     const alpha = (this.hurtPulseTicks / HURT.pulseTicks) * HURT.pulseAlpha
     renderer.context.fillStyle = rgba(COLOR.hurt, alpha)
     renderer.context.fillRect(0, 0, VIEW_WIDTH, VIEW_HEIGHT)
+  }
+
+  private renderHazards(renderer: Renderer): void {
+    const context = renderer.context
+    for (const hazard of this.hazards) {
+      const life = hazard.ticks / hazard.maxTicks
+      if (hazard.kind === "field") {
+        // A lingering danger pool — translucent fill + pulsing rim.
+        const fade = Math.min(1, life * 2)
+        context.fillStyle = rgba(COLOR.danger, 0.14 * fade)
+        renderer.fillCircle(hazard.x, hazard.y, hazard.radius, rgba(COLOR.danger, 0.12 * fade))
+        renderer.strokeCircle(hazard.x, hazard.y, hazard.radius, rgba(COLOR.danger, 0.4 * fade), 2)
+      } else {
+        // A slam flash, brightest at impact.
+        renderer.additive(() =>
+          renderer.glowCircle(hazard.x, hazard.y, hazard.radius * (1.1 - life), COLOR.danger, 16),
+        )
+      }
+    }
   }
 
   private renderBombs(renderer: Renderer): void {

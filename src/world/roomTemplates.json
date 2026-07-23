@@ -143,6 +143,92 @@
         { "type": "shooter", "col": 3, "row": 2 },
         { "type": "shooter", "col": 11, "row": 6 }
       ]
+    },
+    {
+      "id": "pincer",
+      "forDoors": [1, 2, 3, 4],
+      "obstacles": [
+        [7, 4]
+      ],
+      "enemies": [
+        { "type": "shooter", "col": 7, "row": 1 },
+        { "type": "chaser", "col": 3, "row": 6 },
+        { "type": "chaser", "col": 11, "row": 6 }
+      ]
+    },
+    {
+      "id": "flank-drill",
+      "forDoors": [1, 2, 3],
+      "obstacles": [
+        [6, 4],
+        [8, 4]
+      ],
+      "enemies": [
+        { "type": "sentinel", "col": 7, "row": 2 },
+        { "type": "chaser", "col": 3, "row": 5 }
+      ]
+    },
+    {
+      "id": "warded-charge",
+      "forDoors": [1, 2, 3, 4],
+      "obstacles": [],
+      "enemies": [
+        { "type": "warden", "col": 7, "row": 2 },
+        { "type": "charger", "col": 3, "row": 5 },
+        { "type": "charger", "col": 11, "row": 5 }
+      ]
+    },
+    {
+      "id": "keep-moving",
+      "forDoors": [1, 2, 3, 4],
+      "obstacles": [
+        [4, 2],
+        [10, 6]
+      ],
+      "enemies": [
+        { "type": "diver", "col": 5, "row": 4 },
+        { "type": "diver", "col": 9, "row": 4 },
+        { "type": "shooter", "col": 7, "row": 2 }
+      ]
+    },
+    {
+      "id": "shrinking-room",
+      "forDoors": [1, 2, 3],
+      "obstacles": [],
+      "enemies": [
+        { "type": "weaver", "col": 4, "row": 3 },
+        { "type": "weaver", "col": 10, "row": 5 },
+        { "type": "chaser", "col": 7, "row": 4 }
+      ]
+    },
+    {
+      "id": "swarm-nest",
+      "forDoors": [1, 2, 3, 4],
+      "obstacles": [
+        [3, 2],
+        [11, 6]
+      ],
+      "enemies": [
+        { "type": "swarm", "col": 5, "row": 3 },
+        { "type": "swarm", "col": 6, "row": 3 },
+        { "type": "swarm", "col": 9, "row": 5 },
+        { "type": "swarm", "col": 10, "row": 5 },
+        { "type": "hopper", "col": 7, "row": 4 }
+      ]
+    },
+    {
+      "id": "gauntlet-line",
+      "forDoors": [2],
+      "obstacles": [
+        [5, 2],
+        [9, 6]
+      ],
+      "enemies": [
+        { "type": "charger", "col": 7, "row": 2 },
+        { "type": "sentinel", "col": 2, "row": 4 },
+        { "type": "swarm", "col": 11, "row": 4 },
+        { "type": "swarm", "col": 12, "row": 4 }
+      ]
     }
   ]
 }
