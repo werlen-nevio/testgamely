@@ -72,6 +72,8 @@ export interface EnemyContext {
   spawnField: (x: number, y: number, radius: number, ticks: number) => void
   // A one-shot area strike (diver slam).
   spawnBurst: (x: number, y: number, radius: number, damage: number) => void
+  // Spawns an add (used by boss encounters).
+  spawnEnemy: (type: EnemyType, x: number, y: number) => void
 }
 
 // ─── FACTORIES ───

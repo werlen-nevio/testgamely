@@ -46,7 +46,14 @@ import {
   type Enemy,
   type EnemyContext,
 } from "./entities/Enemy"
-import { createBoss, updateBoss, renderBoss, damageBoss, type Boss } from "./entities/Boss"
+import {
+  createBoss,
+  updateBoss,
+  renderBoss,
+  damageBoss,
+  bossContactsPlayer,
+  type Boss,
+} from "./entities/Boss"
 import {
   ProjectilePool,
   copyShotModifiers,
@@ -138,6 +145,9 @@ export class Run implements RunApi {
       this.spawnEnemyProjectile(x, y, velocityX, velocityY, damage),
     spawnField: (x, y, radius, ticks) => this.spawnField(x, y, radius, ticks),
     spawnBurst: (x, y, radius, damage) => this.spawnBurst(x, y, radius, damage),
+    spawnEnemy: (type, x, y) => {
+      if (this.enemies.length < 40) this.enemies.push(createEnemy(type, x, y))
+    },
   }
   private readonly hazards: Hazard[] = []
   // Projectiles spawned during the shot currently being fired, so extra shots
@@ -580,17 +590,7 @@ export class Run implements RunApi {
     if (player.invulnerableTicks > 0) return
 
     const boss = this.boss
-    if (
-      boss &&
-      circlesOverlap(
-        player.transform.x,
-        player.transform.y,
-        player.body.radius,
-        boss.transform.x,
-        boss.transform.y,
-        boss.body.radius,
-      )
-    ) {
+    if (boss && bossContactsPlayer(boss, player.transform.x, player.transform.y, player.body.radius)) {
       this.hurtPlayer(boss.contactDamage)
       return
     }

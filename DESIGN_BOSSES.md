@@ -137,10 +137,13 @@ sodass frühe Floors zahmer starten und sich Runs unterscheiden.
     Körperkontakt schadet. **Counter:** Bahn antizipieren, auf die freie Seite.
   - *Biss-Spucke* — **Tell:** Maul leuchtet `--danger` auf. **Ablauf:** 3 gezielte
     Projektile beim Vorbeiziehen. **Counter:** seitlich ausweichen.
-- **Phase-2-Trigger (<50 %):** **Teilung** — die Schlange zerbricht in zwei
-  kürzere Schlangen, die unabhängig patrouillieren. Zwei Bahnen gleichzeitig,
-  völlig anderes Ausweichen; der „Aha": Kopf ist die Schwachstelle, Körper nur
-  Hindernis.
+- **Phase-2-Trigger (<50 %):** **Umsetzungs-Änderung (dokumentiert):** Eine echte
+  Teilung in zwei unabhängige Schlangen bräuchte ein Multi-Boss-System (zwei
+  Köpfe/HP-Pools) — ausserhalb des jetzigen Ein-Boss-Objekts. Stattdessen
+  **beschleunigt** die Schlange deutlich, **zieht sich enger zusammen** (Körper
+  verstellt mehr Bahn) und die Biss-Spucke wird zum **5-Fächer**. Das ändert das
+  Ausweichen spürbar; der „Aha" bleibt: Kopf ist die Schwachstelle, Körper nur
+  Hindernis. (Eine echte Teilung ist als späteres Feature vermerkt.)
 - **Fehlerkultur:** bestraft Sich-Einkesseln-Lassen (in eine Ecke gedrängt);
   verzeiht Positionierung in der Raummitte mit Bahn-Lesen.
 

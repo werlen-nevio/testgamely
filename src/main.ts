@@ -10,7 +10,7 @@ import { Game } from "./Game"
 import { generateFloor } from "./world/Floor"
 import { recomputePlayerStats } from "./entities/Player"
 import { createEnemy } from "./entities/Enemy"
-import { createBoss } from "./entities/Boss"
+import { createBoss, createBossOfType, pickBossType } from "./entities/Boss"
 import { itemById, ITEMS } from "./items/registry"
 import { createObstacle } from "./entities/Obstacle"
 
@@ -43,6 +43,8 @@ if (import.meta.env.DEV) {
   debugWindow.itemById = itemById
   debugWindow.createEnemy = createEnemy
   debugWindow.createBoss = createBoss
+  debugWindow.createBossOfType = createBossOfType
+  debugWindow.pickBossType = pickBossType
   debugWindow.createObstacle = createObstacle
   debugWindow.ITEMS = ITEMS
 }
